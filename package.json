@@ -1,0 +1,33 @@
+{
+  "name": "msghub",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Self-hosted multi-channel message notification hub",
+  "license": "MIT",
+  "scripts": {
+    "dev": "pnpm -r --parallel --filter @msg/api --filter @msg/web dev",
+    "dev:api": "pnpm --filter @msg/api dev",
+    "dev:web": "pnpm --filter @msg/web dev",
+    "build": "pnpm -r --filter @msg/api --filter @msg/web build",
+    "db:up": "node scripts/db-up.js",
+    "db:migrate": "pnpm --filter @msg/api prisma:migrate",
+    "db:seed": "pnpm --filter @msg/api prisma:seed",
+    "db:generate": "pnpm --filter @msg/api prisma:generate"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@nestjs/core",
+      "@prisma/client",
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "vue-demi"
+    ]
+  },
+  "devDependencies": {
+    "pg": "^8.22.0"
+  }
+}

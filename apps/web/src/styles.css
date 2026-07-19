@@ -1,0 +1,575 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --app-bg: #f4f7fb;
+  --app-surface: #ffffff;
+  --app-border: rgba(15, 23, 42, 0.06);
+  --app-text: #0f172a;
+  --app-muted: #64748b;
+  --app-primary: #2563eb;
+  --app-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+  --app-radius: 16px;
+  --sidebar-width: 248px;
+  --sidebar-collapsed: 80px;
+  --header-height: 64px;
+  --gutter: 12px;
+  --notify-w: min(380px, calc(100vw - 24px));
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  height: 100%;
+  width: 100%;
+  overflow-x: hidden;
+  -webkit-text-size-adjust: 100%;
+}
+
+body,
+#app {
+  min-height: 100%;
+  width: 100%;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: hidden;
+}
+
+body {
+  font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  background: var(--app-bg);
+  color: var(--app-text);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+  height: auto;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.page-card {
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
+  max-width: 100%;
+  overflow: visible;
+}
+
+.table-shell {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  background: var(--app-surface);
+  border: 1px solid var(--app-border);
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
+  padding: 8px 8px 4px;
+  /* 横向滚动由 n-data-table 内部处理；父级设置 overflow-x 会导致固定操作列失效 */
+  overflow: visible;
+}
+
+.n-data-table {
+  min-width: 0;
+}
+.n-data-table-wrapper {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 固定右侧操作列阴影，横向滚动时与主内容区分 */
+.n-data-table .n-data-table-td--fixed-right,
+.n-data-table .n-data-table-th--fixed-right {
+  background: var(--app-surface) !important;
+  box-shadow: -6px 0 8px -6px rgba(15, 23, 42, 0.12);
+}
+
+.table-shell .n-data-table {
+  --n-th-padding: 12px 14px;
+  --n-td-padding: 12px 14px;
+}
+
+/* 日期时间选择器浮层需相对 modal 可见，避免被裁切 */
+.n-modal .n-card,
+.n-modal .n-card__content {
+  overflow: visible !important;
+}
+
+.n-date-panel {
+  max-width: min(360px, calc(100vw - 32px));
+}
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+  max-width: 100%;
+}
+
+.page-title {
+  font-size: clamp(18px, 2.2vw, 22px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #0f172a;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.page-subtitle {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--app-muted);
+  word-break: break-word;
+}
+
+.stat-card {
+  position: relative;
+  overflow: hidden;
+  background: #ffffff;
+  border: 1px solid var(--app-border);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: var(--app-shadow);
+  min-width: 0;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--app-muted);
+  font-weight: 500;
+}
+
+.stat-value {
+  margin-top: 8px;
+  font-size: clamp(20px, 3vw, 28px);
+  font-weight: 750;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  word-break: break-all;
+}
+
+.admin-sider .n-menu {
+  padding: 10px 12px 20px;
+  background: transparent !important;
+  flex: 1;
+  overflow: auto;
+}
+
+.admin-sider .n-menu-item {
+  margin: 4px 0 !important;
+  height: 44px !important;
+  border-radius: 12px !important;
+}
+
+.admin-sider .n-menu-item-content {
+  border-radius: 12px !important;
+  padding-left: 14px !important;
+}
+
+.admin-sider .n-menu-item-content::before {
+  display: none !important;
+}
+
+.admin-sider .n-menu-item-content:hover {
+  background: rgba(37, 99, 235, 0.06) !important;
+}
+
+.admin-sider .n-menu-item-content--selected {
+  background: rgba(37, 99, 235, 0.10) !important;
+  color: #1d4ed8 !important;
+  font-weight: 600;
+}
+
+.admin-sider .n-menu-item-content--selected .n-menu-item-content-header,
+.admin-sider .n-menu-item-content--selected .n-icon {
+  color: #1d4ed8 !important;
+}
+
+.admin-header {
+  backdrop-filter: blur(12px);
+  background: rgba(255, 255, 255, 0.82) !important;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.35);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: #f1f5f9;
+  padding: 2px 6px;
+  border-radius: 6px;
+  word-break: break-all;
+}
+
+.filters-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  max-width: 100%;
+}
+
+.filters-row > * {
+  min-width: 0;
+}
+
+.app-modal {
+  width: min(560px, calc(100vw - 24px)) !important;
+  max-width: calc(100vw - 24px) !important;
+}
+
+/* Teleported overlays — Naive UI modal/dialog structure:
+ *   .n-card.n-modal → .n-card-header / .n-card-content / .n-card__footer / .n-card__action
+ *   .n-dialog → .n-dialog__title / .n-dialog__content / .n-dialog__action
+ * Note: content class is n-card-content (not n-card__content).
+ */
+.n-modal-container {
+  padding: var(--gutter) !important;
+  box-sizing: border-box !important;
+}
+
+.n-modal {
+  max-width: calc(100vw - 24px) !important;
+}
+
+/* 弹窗：限高 + 纵向 flex，内容区可压缩并滚动 */
+.n-card.n-modal,
+.n-dialog {
+  max-width: calc(100vw - 24px) !important;
+  max-height: calc(100vh - 24px) !important;
+  height: auto !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+}
+
+/* 含日期选择器时允许浮层溢出（配合 teleport 到 body） */
+.n-card.n-modal.modal-allow-overflow,
+.n-card.n-modal.modal-allow-overflow > .n-card-content,
+.n-card.n-modal.modal-allow-overflow > .n-card__content-scrollbar {
+  overflow: visible !important;
+  max-height: none !important;
+}
+
+/* 页眉 / 页脚固定，不参与压缩 */
+.n-card.n-modal > .n-card-header,
+.n-card.n-modal > .n-card__footer,
+.n-card.n-modal > .n-card__action,
+.n-dialog > .n-dialog__icon,
+.n-dialog > .n-dialog__title,
+.n-dialog > .n-dialog__close,
+.n-dialog > .n-dialog__action,
+.n-dialog .n-dialog-icon-container {
+  flex-shrink: 0 !important;
+}
+
+/* 内容区可滚动（兼容 content-scrollable 的 scrollbar 包裹层） */
+.n-card.n-modal > .n-card-content,
+.n-card.n-modal > .n-card__content-scrollbar,
+.n-dialog > .n-dialog__content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* 存在 footer/action 时预留底部空间，保证操作按钮始终可见 */
+.n-card.n-modal:has(> .n-card__footer) > .n-card-content,
+.n-card.n-modal:has(> .n-card__footer) > .n-card__content-scrollbar,
+.n-card.n-modal:has(> .n-card__action) > .n-card-content,
+.n-card.n-modal:has(> .n-card__action) > .n-card__content-scrollbar {
+  max-height: calc(100vh - 24px - 140px) !important;
+}
+
+.n-card.n-modal:not(:has(> .n-card__footer)):not(:has(> .n-card__action)) > .n-card-content,
+.n-card.n-modal:not(:has(> .n-card__footer)):not(:has(> .n-card__action)) > .n-card__content-scrollbar {
+  max-height: calc(100vh - 24px - 80px) !important;
+}
+
+.n-dialog:has(> .n-dialog__action) > .n-dialog__content {
+  max-height: calc(100vh - 24px - 160px) !important;
+}
+
+.n-dialog:not(:has(> .n-dialog__action)) > .n-dialog__content {
+  max-height: calc(100vh - 24px - 100px) !important;
+}
+
+/* content-scrollable：内部 scrollbar 容器撑满可用高度 */
+.n-card.n-modal > .n-card__content-scrollbar {
+  display: flex !important;
+  flex-direction: column !important;
+}
+.n-card.n-modal > .n-card__content-scrollbar > .n-scrollbar-container {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  max-height: 100% !important;
+}
+
+/* 不支持 :has 选择器时的高度回退 */
+@supports not selector(:has(*)) {
+  .n-card.n-modal > .n-card-content,
+  .n-card.n-modal > .n-card__content-scrollbar,
+  .n-dialog > .n-dialog__content {
+    max-height: min(70vh, 640px) !important;
+  }
+}
+
+.n-drawer .n-drawer-content-wrapper {
+  max-width: 100vw !important;
+}
+
+.n-drawer-container .n-drawer {
+  max-width: 100vw !important;
+}
+
+.n-drawer .n-drawer-body-content-wrapper {
+  overflow: auto !important;
+  max-height: calc(100vh - 108px) !important;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+/* toast notifications */
+.n-notification-container,
+.n-notification-container--top-right,
+.n-notification-container--top-left,
+.n-notification-container--bottom-right,
+.n-notification-container--bottom-left {
+  width: var(--notify-w) !important;
+  max-width: var(--notify-w) !important;
+  right: 12px !important;
+  left: auto !important;
+  box-sizing: border-box !important;
+  z-index: 5000 !important;
+  pointer-events: none;
+}
+
+.n-notification-container .n-notification {
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 0 0 10px !important;
+  box-sizing: border-box !important;
+  overflow: hidden !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  pointer-events: auto;
+}
+
+.n-notification .n-notification-main {
+  width: 100% !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
+.n-notification .n-notification-main__header {
+  font-size: 14px !important;
+  line-height: 1.35 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.n-notification .n-notification-main__content {
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  white-space: normal !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+  max-height: 6.5em;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
+.n-notification .n-notification-main__meta {
+  word-break: break-all !important;
+}
+
+.n-message-container {
+  max-width: calc(100vw - 16px) !important;
+  box-sizing: border-box !important;
+}
+
+.n-message {
+  max-width: min(420px, calc(100vw - 24px)) !important;
+  word-break: break-word !important;
+  overflow-wrap: anywhere !important;
+}
+
+.n-popover,
+.v-binder-follower-content {
+  max-width: min(100vw - 16px, 420px) !important;
+  box-sizing: border-box !important;
+}
+
+.n-popover .n-popover__content {
+  max-width: 100% !important;
+  overflow: hidden !important;
+}
+
+.n-base-select-menu {
+  max-width: min(100vw - 16px, 480px) !important;
+}
+
+.n-date-panel {
+  max-width: calc(100vw - 16px) !important;
+}
+
+/* bell panel (used inside popover) */
+.notify-panel {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.notify-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 4px 2px 10px;
+  border-bottom: 1px solid var(--app-border);
+}
+
+.notify-list {
+  max-height: min(50vh, 360px);
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.notify-item {
+  padding: 10px 4px;
+  border-bottom: 1px solid #f1f5f9;
+  cursor: pointer;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.notify-item:hover {
+  background: #f8fafc;
+}
+
+.notify-item.unread {
+  background: #f0f7ff;
+}
+
+.notify-item-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.notify-time {
+  font-size: 11px;
+  color: #94a3b8;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.notify-title {
+  margin-top: 4px;
+  font-size: 14px;
+  font-weight: 650;
+  color: #0f172a;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.notify-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notify-empty {
+  padding: 28px 12px;
+  text-align: center;
+  color: #94a3b8;
+  font-size: 13px;
+}
+
+.notify-panel-foot {
+  padding: 10px 2px 2px;
+  border-top: 1px solid var(--app-border);
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .n-notification-container,
+  .n-notification-container--top-right {
+    right: 8px !important;
+    top: 8px !important;
+    width: calc(100vw - 16px) !important;
+    max-width: calc(100vw - 16px) !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .stat-card {
+    padding: 12px;
+  }
+  .page-header {
+    gap: 8px;
+  }
+  .filters-row .n-base-selection,
+  .filters-row .n-input,
+  .filters-row .n-date-picker,
+  .filters-row .n-input-number {
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+}
+
+
+/* layout content safety */
+.admin-content,
+.content-inner,
+.page-card,
+.table-shell {
+  max-width: 100%;
+  min-width: 0;
+}

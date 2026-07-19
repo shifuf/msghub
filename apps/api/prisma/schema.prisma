@@ -1,0 +1,346 @@
+generator client {
+  provider      = "prisma-client-js"
+  // alpine(musl) 默认 openssl3；native 用于本地 Windows/mac 开发
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ChannelType {
+  SERVERCHAN
+  PUSHPLUS
+  DINGTALK
+  TELEGRAM
+  WEBHOOK
+  SMTP
+  INBOX
+  BARK
+  GOTIFY
+  FEISHU
+  DISCORD
+  JPUSH
+}
+
+enum MessageStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  DELAYED
+}
+
+enum MessageSource {
+  OPEN_API
+  ADMIN_TEST
+  ADMIN_SEND
+  BACKUP_ALERT
+  RESEND
+  BATCH
+}
+
+enum MessagePriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+model AdminUser {
+  id           String    @id @default(cuid())
+  username     String    @unique
+  passwordHash String
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+}
+
+model Project {
+  id                      String             @id @default(cuid())
+  name                    String
+  description             String?
+  apiKeyHash              String             @unique
+  apiKeyPrefix            String
+  enabled                 Boolean            @default(true)
+  /// 项目管理员通知邮箱；空则回落全局管理员邮箱
+  adminEmail              String?
+  alertFailRatePct        Int?
+  alertWindowMin          Int                @default(60)
+  lastFailAlertAt         DateTime?
+  /// 每日 SMTP 发信上限；null/0=不限
+  dailyEmailQuota         Int?
+  /// 同一收件人连续失败达到此数自动拉黑；0=关闭
+  emailFailSuppressCount  Int                @default(5)
+  /// 失败告警冷却（分钟）：同收件人/同错误不重复推
+  alertCooldownMin        Int                @default(10)
+  quietHoursEnabled       Boolean            @default(false)
+  quietStart              String?
+  quietEnd                String?
+  quietTimezone           String             @default("Asia/Shanghai")
+  rateLimitPerMin         Int?
+  idempotencyTtlMin       Int                @default(30)
+  inboundToken            String?            @unique
+  /// 超过 N 小时未点击查看（readAt 为空）时，兜底发邮件
+  unreadEmailFallbackEnabled Boolean         @default(false)
+  /// 未读兜底等待小时数（可填小数语义的小时整数，最小 1）
+  unreadEmailFallbackHours   Int             @default(24)
+  /// 未读兜底邮件模板 code（项目/全局）；空则用 title/content 原文
+  unreadEmailTemplateCode    String?
+  createdAt               DateTime           @default(now())
+  updatedAt               DateTime           @updatedAt
+  templates               EmailTemplate[]
+  pushTemplates           PushTemplate[]
+  messages                MessageLog[]
+  bindings                ProjectChannel[]
+  schedules               ScheduledMessage[]
+  suppresses              EmailSuppress[]
+  apiKeys                 ProjectApiKey[]
+  idempotencyRecords      IdempotencyRecord[]
+  events                  EventDefinition[]
+}
+
+model ProjectApiKey {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name       String
+  apiKeyHash String    @unique
+  apiKeyPrefix String
+  enabled    Boolean   @default(true)
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model IdempotencyRecord {
+  id        String   @id @default(cuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  key       String
+  messageId String?
+  response  Json?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@unique([projectId, key])
+  @@index([expiresAt])
+}
+
+model EventDefinition {
+  id                 String           @id @default(cuid())
+  projectId          String?
+  project            Project?         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code               String
+  name               String
+  description        String?
+  defaultPriority    MessagePriority  @default(NORMAL)
+  pushTemplateCode   String?
+  emailTemplateCode  String?
+  enabled            Boolean          @default(true)
+  isSystem           Boolean          @default(false)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@unique([projectId, code])
+  @@index([code])
+}
+
+/// 邮件收件人抑制（黑名单 / 退订 / 退信）
+model EmailSuppress {
+  id        String    @id @default(cuid())
+  /// null = 全局
+  projectId String?
+  project   Project?  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  /// 完整邮箱，或以 @ 开头的域名（如 @spam.example）
+  address   String
+  reason    String?
+  /// MANUAL | AUTO_FAIL | BOUNCE | UNSUBSCRIBE
+  source    String    @default("MANUAL")
+  expiresAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  @@unique([projectId, address])
+  @@index([address])
+  @@index([projectId, createdAt])
+}
+
+/// 全局键值配置（如 globalAdminEmail / siteIcp）
+model SystemSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+/// 门户合作站 / 友链
+model PartnerLink {
+  id           String   @id @default(cuid())
+  name         String
+  url          String
+  logoUrl      String?
+  description  String?
+  displayOrder Int      @default(0)
+  enabled      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([enabled, displayOrder])
+}
+
+model Channel {
+  id               String           @id @default(cuid())
+  name             String
+  type             ChannelType
+  config           Json
+  enabled          Boolean          @default(true)
+  isDefault        Boolean          @default(false)
+  lastHealthAt     DateTime?
+  lastHealthOk     Boolean?
+  lastHealthError  String?
+  lastHealthMs     Int?
+  healthFailStreak Int              @default(0)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+  messages         MessageLog[]
+  bindings         ProjectChannel[]
+
+  @@index([type])
+}
+
+model ProjectChannel {
+  id        String   @id @default(cuid())
+  projectId String
+  channelId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channel   Channel  @relation(fields: [channelId], references: [id], onDelete: Cascade)
+  enabled   Boolean  @default(true)
+  isDefault Boolean  @default(false)
+  isBackup  Boolean  @default(false)
+  // 兜底顺序：数字越小越先尝试（默认渠道固定优先发送，不依赖此字段）
+  priority  Int      @default(100)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([projectId, channelId])
+  @@index([projectId, enabled])
+  @@index([projectId, priority])
+}
+
+model EmailTemplate {
+  id         String   @id @default(cuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code       String
+  name       String
+  subject    String
+  htmlBody   String
+  textBody   String?
+  variables  Json?
+  isSystem   Boolean  @default(false)
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([projectId, code])
+  @@index([code])
+}
+
+model PushTemplate {
+  id         String   @id @default(cuid())
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  code       String
+  name       String
+  titleTpl   String   @default("")
+  contentTpl String
+  variables  Json?
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([projectId, code])
+  @@index([code])
+}
+
+model MessageLog {
+  id            String           @id @default(cuid())
+  projectId     String?
+  project       Project?         @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  channelId     String?
+  channel       Channel?         @relation(fields: [channelId], references: [id], onDelete: SetNull)
+  channelType   ChannelType?
+  source        MessageSource
+  status        MessageStatus    @default(PENDING)
+  priority      MessagePriority  @default(NORMAL)
+  title         String?
+  content       String?
+  payload       Json?
+  response      Json?
+  errorMessage  String?
+  toAddress     String?
+  templateCode  String?
+  eventCode     String?
+  dedupeKey     String?
+  durationMs    Int?
+  attempts      Int              @default(0)
+  attemptDetail Json?
+  nextRetryAt   DateTime?
+  readAt        DateTime?
+  archivedAt    DateTime?
+  parentId      String?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@index([parentId])
+  @@index([projectId, dedupeKey])
+  @@index([toAddress, createdAt])
+  @@index([status, nextRetryAt])
+  @@index([eventCode])
+}
+
+model ScheduledMessage {
+  id           String       @id @default(cuid())
+  projectId    String
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  channelId    String?
+  channelType  ChannelType?
+  kind         String       @default("push")
+  title        String?
+  content      String?
+  html         String?
+  toAddress    String?
+  templateCode String?
+  variables    Json?
+  runAt        DateTime
+  cron         String?
+  status       String       @default("PENDING")
+  lastError    String?
+  messageId    String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([status, runAt])
+  @@index([projectId])
+}
+
+model ActivityLog {
+  id           String   @id @default(cuid())
+  action       String
+  resource     String?
+  resourceId   String?
+  resourceName String?
+  detail       Json?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([action])
+  @@index([resource])
+}
