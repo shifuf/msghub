@@ -4,6 +4,8 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsIn,
+  IsBoolean,
   MinLength,
 } from 'class-validator';
 import { ChannelType } from '@prisma/client';
@@ -55,4 +57,18 @@ export class CreateScheduleDto {
   @IsOptional()
   @IsString()
   cron?: string;
+}
+
+export class UpdateScheduleDto {
+  @IsOptional() @IsString() title?: string;
+  @IsOptional() @IsString() content?: string;
+  @IsOptional() @IsString() html?: string;
+  @IsOptional() @IsDateString() runAt?: string;
+  @IsOptional() @IsString() cron?: string;
+  @IsOptional() @IsObject() variables?: Record<string, unknown>;
+}
+
+export class ResolveScheduleDto {
+  @IsIn(['delivered', 'retry']) action: 'delivered' | 'retry';
+  @IsOptional() @IsBoolean() acknowledgeDuplicateRisk?: boolean;
 }

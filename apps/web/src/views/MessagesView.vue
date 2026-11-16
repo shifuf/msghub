@@ -7,6 +7,7 @@
       </div>
       <div class="flex flex-wrap gap-2">
         <n-button secondary type="error" :loading="clearing" @click="confirmClear">清空日志</n-button>
+        <n-button secondary @click="previewCleanup">预览清理历史记录</n-button>
         <n-button secondary :loading="exporting" @click="doExport">导出 CSV</n-button>
         <n-button
           secondary
@@ -136,13 +137,16 @@
             <n-descriptions-item label="耗时">{{ detail.durationMs ?? '-' }} ms</n-descriptions-item>
             <n-descriptions-item label="时间">{{ formatTime(detail.createdAt) }}</n-descriptions-item>
             <n-descriptions-item label="已读">
+              <template v-if="detail.readAt">{{ formatTime(detail.readAt) }}</template>
+              <template v-else>未读</template>
+            </n-descriptions-item>
+            <n-descriptions-item label="邮件兜底">
               <template v-if="detail.payload?.emailFallback">
-                邮箱兜底已读
+                已发送邮件兜底
                 <span v-if="detail.payload.emailFallback.at"> · {{ formatTime(detail.payload.emailFallback.at) }}</span>
                 <span v-if="detail.payload.emailFallback.to"> · {{ detail.payload.emailFallback.to }}</span>
               </template>
-              <template v-else-if="detail.readAt">{{ formatTime(detail.readAt) }}</template>
-              <template v-else>未读</template>
+              <template v-else>未使用</template>
             </n-descriptions-item>
             <n-descriptions-item label="归档">{{ detail.archivedAt ? formatTime(detail.archivedAt) : '-' }}</n-descriptions-item>
             <n-descriptions-item label="错误">
@@ -176,7 +180,14 @@
           </div>
           <div v-if="detailHtml" class="mt-4">
             <div class="text-sm font-medium mb-1">HTML 预览</div>
-            <div class="html-preview-frame" v-html="detailHtml" />
+            <SafeHtmlPreview :html="detailHtml" class="html-preview-frame" />
+          </div>
+          <div class="mt-4 space-y-2" v-if="deliveryTimeline.length">
+            <div class="text-sm font-medium">投递时间线</div>
+            <div v-for="attempt in deliveryTimeline" :key="attempt.id" class="rounded bg-slate-50 p-3 text-sm">
+              {{ formatTime(attempt.createdAt) }} · {{ CHANNEL_TYPE_LABELS[attempt.channelType] || '站内' }} · {{ STATUS_LABELS[attempt.status] || attempt.status }}
+              <div v-if="attempt.errorMessage" class="text-red-600">{{ attempt.errorMessage }}</div>
+            </div>
           </div>
           <div class="mt-4">
             <div class="text-sm font-medium mb-1">内容</div>
@@ -388,10 +399,27 @@
           <n-input v-model:value="batchForm.to" placeholder="user@example.com" />
         </n-form-item>
       </n-form>
+      <div v-if="batchPreviewResult" class="rounded-lg bg-slate-50 p-3 space-y-2 text-sm">
+        <div class="font-medium">预检结果 · {{ batchPreviewResult.valid ? '校验通过' : '请修正无效项' }}</div>
+        <div>渠道 {{ batchPreviewResult.items.length }} 个 · 有效 {{ batchPreviewResult.items.filter(i => i.valid).length }} 个 · 预计首次发送 {{ batchPreviewResult.estimatedSendAttempts }} 次 · 去重 {{ batchPreviewResult.duplicates.length }} 项</div>
+        <div class="text-xs text-slate-500">重试和兜底可能增加实际发送次数。</div>
+        <div v-for="(item, index) in batchPreviewResult.items" :key="`${item.channelId}-${index}`" :class="item.valid ? 'text-slate-600' : 'text-red-600'">
+          {{ CHANNEL_TYPE_LABELS[item.channelType || ''] || item.channelType || '未知渠道' }} · {{ item.channelId || '-' }}
+          <span v-if="item.recipient"> · {{ item.recipient }}</span>
+          · {{ item.valid ? '有效' : item.errorMessage }}
+        </div>
+        <div v-if="!batchPreviewResult.items.length" class="text-red-600">未找到可发送渠道。</div>
+        <div v-if="batchPreviewResult.smtpQuota" class="text-slate-600">
+          SMTP 今日配额（{{ batchPreviewResult.smtpQuota.timezone }}）：已用 {{ batchPreviewResult.smtpQuota.used }} / {{ batchPreviewResult.smtpQuota.limit ?? '不限' }}，剩余 {{ batchPreviewResult.smtpQuota.remaining ?? '不限' }}。
+          <div class="text-xs text-slate-500">配额仅供预估，未预占；实际发送时重新校验。</div>
+        </div>
+      </div>
+      <p v-else-if="batchPreviewStale" class="text-sm text-amber-700">输入已修改，请重新预检。</p>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showBatch = false">取消</n-button>
-          <n-button type="primary" :loading="batching" @click="doBatch">批量发送</n-button>
+          <n-button secondary :loading="batchPreviewing" :disabled="batching" @click="previewBatch">预检（不发送）</n-button>
+          <n-button type="primary" :loading="batching" :disabled="batchPreviewing" @click="doBatch">预检并确认发送</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -446,6 +474,7 @@
 </template>
 
 <script setup lang="ts">
+import SafeHtmlPreview from '@/components/SafeHtmlPreview.vue';
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
@@ -486,6 +515,7 @@ const page = ref(1);
 const pageSize = 20;
 const showDetail = ref(false);
 const detail = ref<any>(null);
+const deliveryTimeline = ref<any[]>([]);
 const showTimeline = ref(false);
 const timelineAddress = ref('');
 const timelineMessages = ref<any[]>([]);
@@ -496,6 +526,17 @@ const showBatch = ref(false);
 const showSchedule = ref(false);
 const sending = ref(false);
 const batching = ref(false);
+const batchPreviewing = ref(false);
+type BatchPreview = {
+  projectId: string;
+  items: { channelId?: string; channelType?: string; recipient?: string; valid: boolean; errorMessage?: string }[];
+  duplicates: { channelId: string; selectedBy: string }[];
+  estimatedSendAttempts: number;
+  smtpQuota: { limit: number | null; used: number; remaining: number | null; advisory: boolean; timezone: string } | null;
+  valid: boolean;
+};
+const batchPreviewResult = ref<BatchPreview | null>(null);
+const batchPreviewStale = ref(false);
 const scheduling = ref(false);
 const clearing = ref(false);
 const resending = ref<string | null>(null);
@@ -599,6 +640,10 @@ const batchForm = reactive({
   content: '这是一条批量发送的消息',
   to: '',
 });
+watch(batchForm, () => {
+  if (batchPreviewResult.value) batchPreviewStale.value = true;
+  batchPreviewResult.value = null;
+}, { deep: true, flush: 'sync' });
 
 const scheduleForm = reactive({
   projectId: null as string | null,
@@ -813,8 +858,11 @@ function onPage(p: number) {
 }
 
 async function openDetail(id: string) {
+  deliveryTimeline.value = [];
   detail.value = await messagesApi.get(id);
   showDetail.value = true;
+  try { const timeline: any = await messagesApi.timeline(id); deliveryTimeline.value = timeline.attempts || []; }
+  catch { message.warning('投递时间线暂时不可用'); }
   // 站内消息打开详情时自动标记已读；设备推送（JPUSH 等）仅以客户端回执为准
   const ct = detail.value?.channelType;
   const isDevicePush =
@@ -1090,6 +1138,18 @@ async function onSendChannelType(type: string | null) {
   sendForm.variablesJson = '';
 }
 
+async function previewCleanup() {
+  const before = dateRange.value?.[1] ? new Date(dateRange.value[1]).toISOString() : new Date(Date.now() - 30 * 86400000).toISOString();
+  const data = { before, projectId: filters.projectId || undefined };
+  try {
+    const result: any = await messagesApi.cleanup({ ...data, preview: true });
+    dialog.warning({ title: '清理预览', content: `清理 ${formatTime(before)} 之前符合条件的 ${result.matched} 条已结束记录。正在投递或仍被任务引用的记录将保留。`, positiveText: '执行清理', negativeText: '取消', onPositiveClick: async () => {
+      try { const removed: any = await messagesApi.cleanup(data); message.success(`已清理 ${removed.deleted} 条`); reload(); }
+      catch (e: any) { message.error(e.message); }
+    } });
+  } catch (e: any) { message.error(e.message); }
+}
+
 function confirmClear() {
   const projectLabel = filters.projectId
     ? projectOptions.value.find((p) => p.value === filters.projectId)?.label || '当前项目'
@@ -1231,28 +1291,58 @@ async function onBatchProject(projectId: string | null) {
   }
 }
 
-async function doBatch() {
+function batchPayload() {
+  return {
+    projectId: batchForm.projectId!,
+    channelIds: batchForm.channelIds.length ? [...batchForm.channelIds] : undefined,
+    title: batchForm.title, content: batchForm.content, to: batchForm.to || undefined,
+  };
+}
+
+async function previewBatch() {
   if (!batchForm.projectId) {
     message.warning('请选择项目');
-    return;
+    return null;
   }
-  batching.value = true;
+  const payload = batchPayload();
+  const fingerprint = JSON.stringify(payload);
+  batchPreviewResult.value = null;
+  batchPreviewing.value = true;
   try {
-    const res: any = await messagesApi.batch({
-      projectId: batchForm.projectId,
-      channelIds: batchForm.channelIds.length ? batchForm.channelIds : undefined,
-      title: batchForm.title,
-      content: batchForm.content,
-      to: batchForm.to || undefined,
-    });
-    message.success(`批量完成：成功 ${res.success} / 失败 ${res.failed} / 共 ${res.total}`);
-    showBatch.value = false;
-    await load();
-  } catch (e: any) {
-    message.error(e.message);
-  } finally {
-    batching.value = false;
-  }
+    const result: BatchPreview = await messagesApi.batchPreview(payload);
+    if (fingerprint !== JSON.stringify(batchPayload())) { batchPreviewStale.value = true; return null; }
+    batchPreviewResult.value = result; batchPreviewStale.value = false;
+    return { result, payload, fingerprint };
+  } catch (e: any) { message.error(e.message); return null; }
+  finally { batchPreviewing.value = false; }
+}
+
+async function doBatch() {
+  if (batching.value || batchPreviewing.value) return;
+  const preview = await previewBatch();
+  if (!preview) return;
+  if (!preview.result.valid) { message.warning('请先修正预检中的无效项'); return; }
+  let consumed = false;
+  dialog.warning({
+    title: '确认批量发送',
+    content: `预检通过，预计向 ${preview.result.estimatedSendAttempts} 个渠道发送。${preview.result.duplicates.length ? `已去除 ${preview.result.duplicates.length} 个重复选择。` : ''}确认后将实际发送通知。`,
+    positiveText: '确认发送', negativeText: '返回检查',
+    onPositiveClick: async () => {
+      if (batching.value || consumed) return false;
+      if (preview.fingerprint !== JSON.stringify(batchPayload())) {
+        batchPreviewResult.value = null; batchPreviewStale.value = true;
+        message.warning('输入已修改，请重新预检并确认'); return false;
+      }
+      consumed = true;
+      batching.value = true;
+      try {
+        const res: any = await messagesApi.batch(preview.payload);
+        message.success(`批量完成：成功 ${res.success} / 失败 ${res.failed} / 共 ${res.total}`);
+        showBatch.value = false; await load();
+      } catch (e: any) { message.error(e.message); return false; }
+      finally { batching.value = false; }
+    },
+  });
 }
 
 async function doSchedule() {

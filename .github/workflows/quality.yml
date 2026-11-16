@@ -1,0 +1,39 @@
+name: quality
+on: [push, pull_request]
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: audit
+          POSTGRES_PASSWORD: audit
+          POSTGRES_DB: msghub_audit
+        ports: ['56487:5432']
+        options: --health-cmd "pg_isready -U audit -d msghub_audit" --health-interval 5s --health-timeout 5s --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports: ['56488:6379']
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgresql://audit:audit@127.0.0.1:56487/msghub_audit?schema=public
+      AUDIT_DATABASE_URL: postgresql://audit:audit@127.0.0.1:56487/msghub_audit?schema=public
+      AUDIT_REDIS_URL: redis://127.0.0.1:56488
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm db:generate
+      - run: pnpm --filter @msg/api prisma:deploy
+      - run: pnpm check
+      - run: AUDIT_COMPILED=true node --test tests/bootstrap.integration.test.cjs
+      - run: pnpm audit --audit-level=low
+      - run: docker build -f apps/api/Dockerfile .
+      - run: docker build -f apps/web/Dockerfile .

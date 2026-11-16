@@ -60,8 +60,9 @@ export class EventsService {
           isSystem: false,
         },
       });
-    } catch {
-      throw new BadRequestException('事件 code 已存在');
+    } catch (error: any) {
+      if (error?.code === 'P2002') throw new BadRequestException('事件 code 已存在');
+      throw error;
     }
   }
 

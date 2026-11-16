@@ -1,0 +1,5 @@
+# Final UI metrics
+
+Please implement DashboardView new charts metrics now (prior followup apparently missed): timezone:'UTC' label; metrics externalSuccessRate/fallbackRate/latencyP95Ms/queueWaitP95Ms/stalePending/inboxAccepted cards. Null latency means no samples; SMTP accepted not human read. byProject includes delivered/fallback/latencyP95Ms optional columns. error-clusters response totalFailed/sampleSize/sampled; explicitly label capped sample when sampled. Root fixing jsdom install, do not deps. Run typecheck only and update this file. Do not repeat build while root build pending.
+
+Implemented all requested metrics in DashboardView: six quality cards, UTC trend/window labels, provider acceptance vs human-read explanation, P95 explanation, null/undefined/nonfinite latency renders 无样本; milliseconds/seconds formatting preserves zero samples correctly. Project columns show delivered/fallback/P95 with absent values safely rendered. Failed clusters show total failed and explicit recent sampleSize warning when sampled=true. Fresh `pnpm exec vue-tsc --noEmit` passed (12.7s). No build/dependency/API edits performed.

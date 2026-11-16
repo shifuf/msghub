@@ -43,7 +43,7 @@
               type="password"
               show-password-on="click"
               autocomplete="new-password"
-              placeholder="至少 6 位"
+              placeholder="12–72 位"
             />
           </n-form-item>
           <n-form-item label="确认新密码">
@@ -60,6 +60,16 @@
             保存新密码
           </n-button>
         </n-form>
+        <div class="mt-4 space-y-3">
+          <div>双重验证：{{ auth.user?.totpEnabled ? '已开启' : '未开启' }}</div>
+          <n-input v-model:value="totpPassword" type="password" placeholder="确认当前密码" autocomplete="current-password" />
+          <n-button v-if="!auth.user?.totpEnabled" @click="setupTotp">配置验证器</n-button>
+          <div v-if="totpSecret" class="break-all text-sm">在验证器中添加密钥：<code>{{ totpSecret }}</code></div>
+          <n-input v-model:value="totpCode" placeholder="验证器中的 6 位验证码" :maxlength="6" autocomplete="one-time-code" />
+          <n-button v-if="totpSecret" type="primary" @click="enableTotp">确认开启</n-button>
+          <n-button v-if="auth.user?.totpEnabled" @click="disableTotp">关闭双重验证</n-button>
+          <n-button block secondary @click="revokeSessions">撤销所有登录会话</n-button>
+        </div>
       </div>
 
       <div class="page-card settings-card">
@@ -192,6 +202,14 @@
             导入 JSON
           </n-button>
         </div>
+        <n-form-item label="备份密码（完整备份需要，至少 12 位）" class="mt-3">
+          <n-input v-model:value="backupPassword" type="password" autocomplete="new-password" />
+        </n-form-item>
+        <n-switch v-model:value="redactBackup" /> <span class="text-sm">仅导出脱敏配置</span>
+        <div v-if="pendingImport" class="mt-3">
+          <n-button type="warning" :loading="importing" @click="confirmImport">按以下预览执行导入</n-button>
+          <n-button text @click="pendingImport = null">取消</n-button>
+        </div>
         <input
           ref="fileInput"
           type="file"
@@ -200,6 +218,15 @@
           @change="onImportFile"
         />
         <pre v-if="importResult" class="import-result">{{ JSON.stringify(importResult, null, 2) }}</pre>
+      </div>
+
+      <div class="page-card settings-card">
+        <div class="card-title">数据保留策略</div>
+        <p class="card-desc">仅自动清理已结束的记录；0 表示关闭自动清理。</p>
+        <n-form-item label="发送记录（天）"><n-input-number v-model:value="retentionDays" :min="0" :max="3650" :precision="0" /></n-form-item>
+        <n-form-item label="操作日志（天）"><n-input-number v-model:value="activityRetentionDays" :min="0" :max="36500" :precision="0" /></n-form-item>
+        <n-form-item label="敏感通知正文脱敏（天）"><n-input-number v-model:value="sensitiveRetentionDays" :min="0" :max="36500" :precision="0" /></n-form-item>
+        <n-button class="mt-3" @click="saveRetention">保存保留天数</n-button>
       </div>
 
       <div class="page-card settings-card settings-card-wide">
@@ -230,7 +257,10 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { NForm, NFormItem, NInput, NButton, NTag, useMessage } from 'naive-ui';
+import { NForm, NFormItem, NInput, NInputNumber, NButton, NTag, NSwitch, useMessage } from 'naive-ui';
+import { useRouter } from 'vue-router';
+import { getAdminPath } from '@/config';
+import { useNotifyStore } from '@/stores/notify';
 import { authApi, backupApi, settingsApi } from '@/api';
 import { useAuthStore } from '@/stores/auth';
 import AppIcon from '@/components/AppIcon.vue';
@@ -247,6 +277,49 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const notifyPermission = ref<NotificationPermission | 'unsupported'>('default');
 const desktopEnabled = ref(false);
 const message = useMessage();
+const router = useRouter();
+const backupPassword = ref('');
+const redactBackup = ref(true);
+const pendingImport = ref<any>(null);
+const totpPassword = ref('');
+const totpCode = ref('');
+const totpSecret = ref('');
+const retentionDays = ref<number | null>(0);
+const activityRetentionDays = ref<number | null>(0);
+const sensitiveRetentionDays = ref<number | null>(0);
+async function saveRetention() {
+  try {
+    await settingsApi.update({ messageRetentionDays: String(retentionDays.value ?? 0), activityRetentionDays: String(activityRetentionDays.value ?? 0), sensitiveRetentionDays: String(sensitiveRetentionDays.value ?? 0) });
+    message.success('保留策略已保存');
+  }
+  catch (e: any) { message.error(e.message); }
+}
+onMounted(async () => {
+  try {
+    const result: any = await settingsApi.get();
+    retentionDays.value = Number(result.messageRetentionDays) || 0;
+    activityRetentionDays.value = Number(result.activityRetentionDays) || 0;
+    sensitiveRetentionDays.value = Number(result.sensitiveRetentionDays) || 0;
+  }
+  catch { message.warning('无法加载保留策略'); }
+});
+function reauthenticate() { useNotifyStore().stop(); auth.logout(); void router.replace(getAdminPath()); }
+async function setupTotp() {
+  try { const result: any = await authApi.setupTotp(totpPassword.value); totpSecret.value = result.secret; }
+  catch (e: any) { message.error(e.message); }
+}
+async function enableTotp() {
+  try { await authApi.enableTotp(totpCode.value); message.success('双重验证已开启，请重新登录'); reauthenticate(); }
+  catch (e: any) { message.error(e.message); }
+}
+async function disableTotp() {
+  try { await authApi.disableTotp(totpPassword.value, totpCode.value); reauthenticate(); }
+  catch (e: any) { message.error(e.message); }
+}
+async function revokeSessions() {
+  try { await authApi.revokeSessions(); reauthenticate(); }
+  catch (e: any) { message.error(e.message); }
+}
 const siteForm = reactive({
   globalAdminEmail: '',
   siteName: '',
@@ -370,9 +443,10 @@ async function loadGlobalSettings() {
 }
 
 async function exportBackup() {
+  if (!redactBackup.value && backupPassword.value.length < 12) { message.warning('完整备份请设置至少 12 位加密密码'); return; }
   exporting.value = true;
   try {
-    const data: any = await backupApi.export();
+    const data: any = await backupApi.export({ redact: redactBackup.value, password: backupPassword.value || undefined });
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -402,9 +476,12 @@ async function onImportFile(ev: Event) {
   try {
     const text = await file.text();
     const data = JSON.parse(text);
-    const res: any = await backupApi.import(data);
+    pendingImport.value = null;
+    const payload = { data, password: backupPassword.value || undefined };
+    const res: any = await backupApi.preview(payload);
     importResult.value = res;
-    message.success('导入完成');
+    pendingImport.value = payload;
+    message.success('预检完成，请检查差异后执行导入');
   } catch (e: any) {
     message.error(e.message || '导入失败');
   } finally {
@@ -413,13 +490,21 @@ async function onImportFile(ev: Event) {
   }
 }
 
+async function confirmImport() {
+  if (!pendingImport.value) return;
+  importing.value = true;
+  try { importResult.value = await backupApi.import(pendingImport.value); pendingImport.value = null; message.success('导入完成'); }
+  catch (e: any) { message.error(e.message || '导入失败'); }
+  finally { importing.value = false; }
+}
+
 async function submit() {
   if (!form.oldPassword || !form.newPassword) {
     message.warning('请填写完整');
     return;
   }
-  if (form.newPassword.length < 6) {
-    message.warning('新密码至少 6 位');
+  if (form.newPassword.length < 12 || form.newPassword.length > 72) {
+    message.warning('新密码需要 12–72 位');
     return;
   }
   if (form.newPassword !== form.confirm) {
@@ -433,6 +518,7 @@ async function submit() {
     form.oldPassword = '';
     form.newPassword = '';
     form.confirm = '';
+    reauthenticate();
   } catch (e: any) {
     message.error(e.message);
   } finally {

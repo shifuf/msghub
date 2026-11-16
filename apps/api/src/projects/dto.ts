@@ -126,6 +126,12 @@ export class UpdateProjectDto {
   @Max(43200)
   unreadEmailFallbackHours?: number;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(43200)
+  unreadEmailFallbackMinutes?: number;
+
   /** 未读兜底邮件模板 code；空=纯文本标题/正文 */
   @IsOptional()
   @IsString()

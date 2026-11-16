@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
-import { ChannelType, MessageStatus, MessageSource } from '@prisma/client';
+import { ChannelType, MessageStatus, MessageSource, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { isValidEmail } from '../common/utils';
 
@@ -74,19 +74,38 @@ export class EmailPolicyService {
     if (quota == null || quota <= 0) return;
 
     const start = new Date();
-    start.setHours(0, 0, 0, 0);
+    start.setUTCHours(0, 0, 0, 0);
     const used = await this.prisma.messageLog.count({
       where: {
         projectId,
         channelType: ChannelType.SMTP,
         source: { not: MessageSource.BACKUP_ALERT },
         createdAt: { gte: start },
-        status: { in: [MessageStatus.SUCCESS, MessageStatus.PENDING] },
       },
     });
     if (used >= quota) {
       throw new BadRequestException(`已达项目每日邮件配额（${quota}），请明日再试或调高配额`);
     }
+  }
+
+  /** The per-project lock spans quota admission and durable reservation. */
+  async reserveEmailLog(data: Prisma.MessageLogUncheckedCreateInput) {
+    return this.prisma.$transaction(async (tx) => {
+      const projectId = data.projectId!;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`email-quota:${projectId}`}, 0))`;
+      const project = await tx.project.findUnique({ where: { id: projectId }, select: { dailyEmailQuota: true } });
+      const quota = project?.dailyEmailQuota;
+      if (quota && quota > 0 && data.source !== MessageSource.BACKUP_ALERT) {
+        const start = new Date();
+        start.setUTCHours(0, 0, 0, 0);
+        const used = await tx.messageLog.count({ where: {
+          projectId, channelType: ChannelType.SMTP,
+          source: { not: MessageSource.BACKUP_ALERT }, createdAt: { gte: start },
+        } });
+        if (used >= quota) throw new BadRequestException(`已达项目每日邮件配额（${quota}）`);
+      }
+      return tx.messageLog.create({ data });
+    });
   }
 
   async listSuppress(opts: { projectId?: string; q?: string; page?: number; pageSize?: number }) {
@@ -255,7 +274,7 @@ export class EmailPolicyService {
 
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000);
     const startToday = new Date();
-    startToday.setHours(0, 0, 0, 0);
+    startToday.setUTCHours(0, 0, 0, 0);
 
     const [smtpTotal24h, smtpFail24h, smtpSuccess24h, smtpToday, suppressCount, lastSmtp] =
       await Promise.all([
@@ -290,7 +309,6 @@ export class EmailPolicyService {
             projectId,
             channelType: ChannelType.SMTP,
             createdAt: { gte: startToday },
-            status: { in: [MessageStatus.SUCCESS, MessageStatus.PENDING] },
             source: { not: MessageSource.BACKUP_ALERT },
           },
         }),

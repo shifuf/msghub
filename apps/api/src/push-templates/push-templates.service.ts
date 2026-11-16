@@ -252,7 +252,8 @@ export class PushTemplatesService {
   }
 
   async preview(id: string, variables: Record<string, unknown> = {}) {
-    const t = await this.get(id);
+    const live = await this.get(id);
+    const t = { ...live, ...(live.draft && typeof live.draft === 'object' && !Array.isArray(live.draft) ? live.draft as Record<string, any> : {}) };
     return {
       title: this.render(t.titleTpl, variables),
       content: this.render(t.contentTpl, variables),

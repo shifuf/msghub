@@ -80,7 +80,7 @@ export class GotifyAdapter implements ChannelAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
-      });
+      }, undefined, { allowHttp: true, allowPrivate: config.allowPrivate !== false });
       if (!res.ok) {
         const data = res.data as { error?: string; errorDescription?: string } | null;
         return {

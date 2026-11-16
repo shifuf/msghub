@@ -25,12 +25,26 @@
       </div>
     </div>
 
+    <div class="page-card p-4 md:p-5 space-y-3">
+      <div>
+        <div class="font-semibold text-slate-800">近 {{ days }} 日投递质量</div>
+        <p class="text-xs text-slate-500 mt-1">按 {{ charts.timezone || 'UTC' }} 日期统计。外发成功表示服务商接受发送请求；SMTP 接受不代表用户已阅读。P95 表示 95% 的样本耗时不超过该值。</p>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+        <div v-for="card in qualityCards" :key="card.label" class="stat-card">
+          <div class="stat-label">{{ card.label }}</div>
+          <div class="text-xl font-semibold text-slate-800 mt-2">{{ card.value }}</div>
+          <div class="text-xs text-slate-400 mt-1">{{ card.note }}</div>
+        </div>
+      </div>
+    </div>
+
     <div class="grid lg:grid-cols-3 gap-4">
       <div class="page-card p-4 md:p-5 lg:col-span-2">
         <div class="flex items-center justify-between mb-3">
           <div>
             <div class="font-semibold text-slate-800">近 {{ days }} 日发送趋势</div>
-            <div class="text-xs text-slate-400 mt-0.5">成功率 {{ charts.successRate ?? 0 }}%</div>
+            <div class="text-xs text-slate-400 mt-0.5">{{ charts.timezone || 'UTC' }} 日期 · 记录成功率 {{ charts.successRate ?? 0 }}%（含站内接收）</div>
           </div>
         </div>
         <div class="chart-bars" v-if="charts.trend?.length">
@@ -75,7 +89,7 @@
           :data="charts.byProject || []"
           :bordered="false"
           size="small"
-          :scroll-x="420"
+          :scroll-x="720"
         />
       </div>
 
@@ -96,6 +110,7 @@
         <div>
           <div class="font-semibold text-slate-800">失败原因聚类</div>
           <div class="text-xs text-slate-400 mt-0.5">近 {{ days }} 天 · 共 {{ clusters.totalFailed || 0 }} 条失败</div>
+          <div v-if="clusters.sampled" class="text-xs text-amber-700 mt-1">以下聚类基于最近 {{ clusters.sampleSize ?? 2000 }} 条样本，不代表全部失败记录的分布。</div>
         </div>
         <n-button text type="primary" @click="loadClusters">刷新</n-button>
       </div>
@@ -153,6 +168,22 @@ const cards = computed(() => [
   { label: '未读', value: stats.value.unreadCount ?? 0 },
 ]);
 
+function latency(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(Number(value))) return '无样本';
+  return Number(value) >= 1000 ? `${(Number(value) / 1000).toFixed(2)} 秒` : `${Math.round(Number(value))} ms`;
+}
+const qualityCards = computed(() => {
+  const metrics = charts.value.metrics || {};
+  return [
+    { label: '外发成功率', value: metrics.externalSuccessRate == null ? '-' : `${metrics.externalSuccessRate}%`, note: `已接受 ${metrics.delivered ?? 0} / 外发记录 ${metrics.externalAttempts ?? 0}` },
+    { label: '兜底记录比例', value: metrics.fallbackRate == null ? '-' : `${metrics.fallbackRate}%`, note: '按兜底标记或关联记录统计' },
+    { label: '投递耗时 P95', value: latency(metrics.latencyP95Ms), note: '创建至服务商接受' },
+    { label: '队列等待 P95', value: latency(metrics.queueWaitP95Ms), note: '创建至开始投递' },
+    { label: '等待超过 5 分钟', value: metrics.stalePending ?? '-', note: '统计范围内的排队记录' },
+    { label: '站内接收', value: metrics.inboxAccepted ?? '-', note: '成功写入站内的记录' },
+  ];
+});
+
 function barH(n: number) {
   return `${Math.max(2, Math.round(((n || 0) / maxTotal.value) * 120))}px`;
 }
@@ -168,6 +199,9 @@ const projectColumns = [
   { title: '总量', key: 'count', width: 70 },
   { title: '成功', key: 'success', width: 70 },
   { title: '失败', key: 'failed', width: 70 },
+  { title: '外发已接受', key: 'delivered', width: 105, render: (row: any) => row.delivered ?? '-' },
+  { title: '兜底记录', key: 'fallback', width: 90, render: (row: any) => row.fallback ?? '-' },
+  { title: '投递 P95', key: 'latencyP95Ms', width: 110, render: (row: any) => latency(row.latencyP95Ms) },
 ];
 
 const recentColumns = [

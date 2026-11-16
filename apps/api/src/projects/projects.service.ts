@@ -30,6 +30,7 @@ export class ProjectsService {
       idempotencyTtlMin: p.idempotencyTtlMin ?? 30,
       unreadEmailFallbackEnabled: p.unreadEmailFallbackEnabled ?? false,
       unreadEmailFallbackHours: p.unreadEmailFallbackHours ?? 24,
+      unreadEmailFallbackMinutes: p.unreadEmailFallbackHours ?? 24,
       unreadEmailTemplateCode: p.unreadEmailTemplateCode ?? null,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -209,10 +210,19 @@ export class ProjectsService {
       idempotencyTtlMin?: number;
       unreadEmailFallbackEnabled?: boolean;
       unreadEmailFallbackHours?: number;
+      unreadEmailFallbackMinutes?: number;
       unreadEmailTemplateCode?: string | null;
     },
   ) {
     await this.get(id);
+    if (data.unreadEmailFallbackMinutes !== undefined) data.unreadEmailFallbackHours = data.unreadEmailFallbackMinutes;
+    if (data.quietTimezone !== undefined) {
+      try { new Intl.DateTimeFormat('en-US', { timeZone: data.quietTimezone.trim() }).format(); }
+      catch { throw new BadRequestException('quietTimezone 必须为有效 IANA 时区'); }
+    }
+    for (const field of ['quietStart', 'quietEnd'] as const) {
+      if (data[field] && !/^([01]\d|2[0-3]):[0-5]\d$/.test(data[field]!)) throw new BadRequestException(`${field} 必须为 HH:mm`);
+    }
     let adminEmail: string | null | undefined = undefined;
     if (data.adminEmail !== undefined) {
       const v = (data.adminEmail || '').trim();

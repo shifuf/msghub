@@ -1,23 +1,14 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { dashboardApi } from '@/api';
+import { dashboardApi, messagesApi, realtimeApi } from '@/api';
 import { useAuthStore } from './auth';
 
 export type NotifyItem = {
-  id: string;
-  title?: string;
-  content?: string;
-  status: string;
-  channelType?: string;
-  createdAt: string;
-  errorMessage?: string;
-  project?: { id: string; name: string } | null;
-  channel?: { id: string; name: string; type: string } | null;
-  read?: boolean;
+  id: string; title?: string; content?: string; status: string; channelType?: string;
+  createdAt: string; updatedAt?: string; readAt?: string | null; archivedAt?: string | null;
+  errorMessage?: string; project?: { id: string; name: string } | null;
+  channel?: { id: string; name: string; type: string } | null; read?: boolean;
 };
-
-const READ_IDS_KEY = 'msg_notify_read_ids';
-const DESKTOP_NOTIFY_KEY = 'msg_desktop_notify';
 
 export const useNotifyStore = defineStore('notify', () => {
   const items = ref<NotifyItem[]>([]);
@@ -25,232 +16,150 @@ export const useNotifyStore = defineStore('notify', () => {
   const failed24h = ref(0);
   const connected = ref(false);
   const freshQueue = ref<NotifyItem[]>([]);
+  const serverUnread = ref<number | null>(null);
+  const unreadCount = computed(() => serverUnread.value ?? items.value.filter(i => !i.read).length);
   let es: EventSource | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let cursor: string | undefined;
+  let since: string | undefined;
+  let generation = 0;
+  let syncing: Promise<void> | null = null;
+  const seenTransitions = new Map<string, string>();
 
-  const unreadCount = computed(() => items.value.filter((i) => !i.read).length);
-
-  function loadReadIds(): Set<string> {
+  function alert(item: NotifyItem) {
+    freshQueue.value = [...freshQueue.value, { ...item }];
     try {
-      const raw = localStorage.getItem(READ_IDS_KEY);
-      return new Set(raw ? JSON.parse(raw) : []);
-    } catch {
-      return new Set();
-    }
-  }
-
-  function saveReadIds(ids: Set<string>) {
-    localStorage.setItem(READ_IDS_KEY, JSON.stringify(Array.from(ids).slice(-200)));
-  }
-
-  function showDesktopNotification(item: NotifyItem) {
-    try {
-      if (typeof window === 'undefined' || !('Notification' in window)) return;
-      if (localStorage.getItem(DESKTOP_NOTIFY_KEY) !== '1') return;
-      if (Notification.permission !== 'granted') return;
-
-      const isFail = item.status === 'FAILED';
-      const isInbox = !item.channelType && !item.channel;
-      const title =
-        item.title || (isFail ? '发送失败' : isInbox ? '站内通知' : '新消息');
-      const body = [
-        item.project?.name || '系统',
-        isFail
-          ? item.errorMessage || item.content || '消息发送失败'
-          : item.content || '收到一条新消息',
-      ]
-        .filter(Boolean)
-        .join(' · ');
-
-      const n = new Notification(title, {
-        body: body.slice(0, 200),
+      if (typeof window === 'undefined' || !('Notification' in window)
+        || localStorage.getItem('msg_desktop_notify') !== '1'
+        || Notification.permission !== 'granted') return;
+      if (item.status !== 'FAILED' && item.channelType) return;
+      const notification = new Notification(item.title || (item.status === 'FAILED' ? '发送失败' : '站内通知'), {
+        body: `${item.project?.name || '系统'} · ${item.errorMessage || item.content || '收到一条新消息'}`.slice(0, 200),
         tag: `msg-${item.status}-${item.id}`,
       });
-      n.onclick = () => {
-        try {
-          window.focus();
-        } catch {
-          /* ignore */
-        }
-        n.close();
-      };
-    } catch {
-      /* ignore desktop notify errors */
-    }
+      notification.onclick = () => { window.focus(); notification.close(); };
+    } catch { /* Desktop notifications are optional. */ }
   }
 
-  function upsertMessage(msg: any, opts: { notify?: boolean } = {}) {
+  function upsertMessage(msg: NotifyItem, notify = false) {
     if (!msg?.id) return;
-    const readIds = loadReadIds();
-    const existing = items.value.find((i) => i.id === msg.id);
-    if (existing) {
-      Object.assign(existing, msg, { read: existing.read || readIds.has(msg.id) });
-      return;
-    }
-    const item: NotifyItem = {
-      ...msg,
-      read: readIds.has(msg.id),
-    };
-    items.value = [item, ...items.value].slice(0, 50);
-    if (opts.notify && !item.read) {
-      freshQueue.value = [...freshQueue.value, item];
-      // 发送失败或纯站内收件时弹出系统通知
-      if (item.status === 'FAILED' || !item.channelType) {
-        showDesktopNotification(item);
-      }
-    }
+    const existing = items.value.find(i => i.id === msg.id);
+    if (existing?.updatedAt && msg.updatedAt && msg.updatedAt < existing.updatedAt) return;
+    const oldStatus = seenTransitions.get(msg.id) ?? existing?.status;
+    const merged = { ...existing, ...msg };
+    merged.read = !!merged.readAt;
+    if (msg.archivedAt) items.value = items.value.filter(i => i.id !== msg.id);
+    else if (existing) Object.assign(existing, merged);
+    else items.value = [merged, ...items.value].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 100);
+    seenTransitions.set(msg.id, msg.status);
+    if (seenTransitions.size > 5000) seenTransitions.delete(seenTransitions.keys().next().value!);
+    if (notify && !merged.read && !merged.archivedAt && oldStatus !== msg.status) alert(merged);
   }
 
-  function handleSsePayload(raw: string) {
-    try {
-      const ev = JSON.parse(raw);
-      if (ev.type === 'message' && ev.data) {
-        upsertMessage(ev.data, { notify: true });
-      }
-    } catch {
-      /* ignore */
-    }
+  function counts(data: any) {
+    pending.value = data.pending ?? pending.value;
+    failed24h.value = data.failed24h ?? failed24h.value;
+    if (typeof data.unreadCount === 'number') serverUnread.value = data.unreadCount;
   }
 
   async function bootstrap() {
-    try {
-      const data: any = await dashboardApi.notifications({ limit: 20 });
-      const readIds = loadReadIds();
-      items.value = (data?.items || []).map((m: any) => ({
-        ...m,
-        read: readIds.has(m.id),
-      }));
-      pending.value = data?.pending ?? 0;
-      failed24h.value = data?.failed24h ?? 0;
-    } catch (e) {
-      console.debug('notify bootstrap failed', e);
-    }
+    const current = generation;
+    const data: any = await dashboardApi.notifications({ limit: 100 });
+    if (current !== generation) return;
+    items.value = [];
+    for (const item of data.items || []) upsertMessage(item);
+    cursor = data.nextCursor;
+    since = data.serverTime;
+    counts(data);
   }
 
-  function connectSse() {
-    disconnectSse();
-    const auth = useAuthStore();
-    if (!auth.token) return;
-
-    const url = `/api/admin/realtime/stream?token=${encodeURIComponent(auth.token)}`;
-    es = new EventSource(url);
-
-    es.addEventListener('ready', () => {
-      connected.value = true;
-    });
-    es.addEventListener('message', (e) => handleSsePayload(e.data));
-    es.addEventListener('ping', () => {
-      connected.value = true;
-    });
-    // 默认 message 事件（未指定 event 字段时）
-    es.onmessage = (e) => handleSsePayload(e.data);
-
-    es.onerror = () => {
-      connected.value = false;
-      disconnectSse();
-      // SSE 断开后降级为轮询，并尝试重连
-      startPollFallback();
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      reconnectTimer = setTimeout(() => {
-        connectSse();
-      }, 5000);
-    };
-
-    es.onopen = () => {
-      connected.value = true;
-      stopPollFallback();
-    };
-  }
-
-  function disconnectSse() {
-    if (es) {
-      es.close();
-      es = null;
-    }
-  }
-
-  function startPollFallback() {
-    if (pollTimer) return;
-    pollTimer = setInterval(async () => {
-      try {
-        const newest = items.value[0]?.createdAt;
-        const data: any = await dashboardApi.notifications({
-          since: newest,
-          limit: 20,
-        });
-        pending.value = data?.pending ?? pending.value;
-        failed24h.value = data?.failed24h ?? failed24h.value;
-        for (const m of data?.items || []) {
-          const known = items.value.some((i) => i.id === m.id);
-          upsertMessage(m, { notify: known ? false : true });
-        }
-      } catch {
-        /* ignore */
+  function synchronize() {
+    if (syncing) return syncing;
+    const current = generation;
+    syncing = (async () => {
+      if (!cursor && !since) { await bootstrap(); return; }
+      let more = true;
+      let watermark: string | undefined;
+      while (more && current === generation) {
+        const data: any = await dashboardApi.notifications({ cursor, since: cursor ? undefined : since, limit: 100 });
+        if (current !== generation) return;
+        watermark ||= data.serverTime;
+        for (const item of data.items || []) upsertMessage(item, true);
+        counts(data);
+        more = !!data.hasMore;
+        if (more && (!data.nextCursor || data.nextCursor === cursor)) throw new Error('通知同步游标未前进');
+        cursor = data.nextCursor || undefined;
+        if (!more && watermark) since = new Date(new Date(watermark).getTime() - 1000).toISOString();
       }
-    }, 12000);
+    })().finally(() => { syncing = null; });
+    return syncing;
   }
 
-  function stopPollFallback() {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+  function disconnectSse() { es?.close(); es = null; connected.value = false; }
+  function retry(current: number) {
+    if (current !== generation) return;
+    disconnectSse();
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = setTimeout(() => { void connectSse(current); }, 5000);
+  }
+  async function connectSse(current: number) {
+    disconnectSse();
+    if (!useAuthStore().token || current !== generation) return;
+    try {
+      const result: any = await realtimeApi.ticket();
+      if (current !== generation) return;
+      const source = new EventSource(`/api/admin/realtime/stream?ticket=${encodeURIComponent(result.ticket)}`);
+      es = source;
+      source.addEventListener('message', (event) => {
+        if (current !== generation) return;
+        try {
+          const payload = JSON.parse((event as MessageEvent).data);
+          if (payload.type === 'message') upsertMessage(payload.data, true);
+        } catch { /* Polling reconciles malformed or missed events. */ }
+      });
+      source.onopen = async () => {
+        try { await synchronize(); if (es === source) connected.value = true; }
+        catch { retry(current); }
+      };
+      source.onerror = () => retry(current);
+    } catch { retry(current); }
+  }
+
+  function consumeFresh() { const list = freshQueue.value.slice(); freshQueue.value = []; return list; }
+  async function markRead(id: string) {
+    const result: any = await messagesApi.markRead([id]);
+    const item = items.value.find(i => i.id === id);
+    if (item && !item.read) {
+      item.readAt = result?.readAt || new Date().toISOString(); item.read = true;
+      if (serverUnread.value !== null) serverUnread.value = Math.max(0, serverUnread.value - 1);
     }
   }
-
-  function consumeFresh(): NotifyItem[] {
-    if (!freshQueue.value.length) return [];
-    const list = freshQueue.value.slice();
-    freshQueue.value = [];
-    return list;
-  }
-
-  function markRead(id: string) {
-    const readIds = loadReadIds();
-    readIds.add(id);
-    saveReadIds(readIds);
-    const it = items.value.find((i) => i.id === id);
-    if (it) it.read = true;
-  }
-
-  function markAllRead() {
-    const readIds = loadReadIds();
-    for (const i of items.value) {
-      i.read = true;
-      readIds.add(i.id);
-    }
-    saveReadIds(readIds);
+  async function markAllRead() {
+    const ids = items.value.filter(i => !i.read).map(i => i.id);
+    if (!ids.length) return;
+    const result: any = await messagesApi.markRead(ids);
+    for (const item of items.value) if (ids.includes(item.id)) { item.readAt = result?.readAt || new Date().toISOString(); item.read = true; }
+    if (serverUnread.value !== null) serverUnread.value = Math.max(0, serverUnread.value - ids.length);
     freshQueue.value = [];
   }
-
   async function start() {
     stop();
-    await bootstrap();
-    connectSse();
+    const current = generation;
+    try { await bootstrap(); } catch { /* Polling retries bootstrap. */ }
+    if (current !== generation) return;
+    // Reconcile even while SSE is connected to recover missed cross-instance events.
+    pollTimer = setInterval(() => { void synchronize().catch(() => {}); }, 12000);
+    await connectSse(current);
   }
-
   function stop() {
+    generation++;
     disconnectSse();
-    stopPollFallback();
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    connected.value = false;
+    if (pollTimer) clearInterval(pollTimer);
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    pollTimer = null; reconnectTimer = null; syncing = null;
+    cursor = undefined; since = undefined; freshQueue.value = []; seenTransitions.clear();
+    items.value = []; serverUnread.value = null;
   }
-
-  return {
-    items,
-    pending,
-    failed24h,
-    unreadCount,
-    connected,
-    freshQueue,
-    consumeFresh,
-    markRead,
-    markAllRead,
-    start,
-    stop,
-    bootstrap,
-  };
+  return { items, pending, failed24h, unreadCount, connected, freshQueue, consumeFresh, markRead, markAllRead, start, stop, bootstrap };
 });

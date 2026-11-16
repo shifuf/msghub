@@ -24,6 +24,9 @@ export type SiteSettings = {
   siteContactEmail: string;
   siteDescription: string;
   globalAdminEmail: string;
+  messageRetentionDays: string;
+  activityRetentionDays: string;
+  sensitiveRetentionDays: string;
 };
 
 @Injectable()
@@ -40,6 +43,9 @@ export class SiteService {
       siteContactEmail: '',
       siteDescription: '',
       globalAdminEmail: '',
+      messageRetentionDays: '0',
+      activityRetentionDays: '0',
+      sensitiveRetentionDays: '0',
     };
   }
 
@@ -47,7 +53,7 @@ export class SiteService {
     const rows = await this.prisma.systemSetting.findMany({
       where: {
         key: {
-          in: [...SITE_KEYS, 'globalAdminEmail'],
+          in: [...SITE_KEYS, 'globalAdminEmail', 'messageRetentionDays', 'activityRetentionDays', 'sensitiveRetentionDays'],
         },
       },
     });
@@ -57,6 +63,7 @@ export class SiteService {
       if (map.has(k)) (base as any)[k] = map.get(k) || '';
     }
     base.globalAdminEmail = map.get('globalAdminEmail') || '';
+    for (const key of ['messageRetentionDays', 'activityRetentionDays', 'sensitiveRetentionDays'] as const) base[key] = map.get(key) || '0';
     return base;
   }
 
@@ -64,16 +71,20 @@ export class SiteService {
     const allowed: (keyof SiteSettings)[] = [
       ...SITE_KEYS,
       'globalAdminEmail',
+      'messageRetentionDays', 'activityRetentionDays', 'sensitiveRetentionDays',
     ];
+    const updates: { key: string; value: string }[] = [];
     for (const key of allowed) {
       if (partial[key] === undefined) continue;
       const value = String(partial[key] ?? '').trim();
-      await this.prisma.systemSetting.upsert({
+      if (key.endsWith('RetentionDays') && (!/^\d+$/.test(value) || Number(value) > 36500)) throw new BadRequestException('保留天数必须为 0–36500 的整数，0 表示关闭');
+      updates.push({ key, value });
+    }
+    await this.prisma.$transaction(updates.map(({ key, value }) => this.prisma.systemSetting.upsert({
         where: { key },
         create: { key, value },
         update: { value },
-      });
-    }
+      })));
     return this.getSiteSettings();
   }
 

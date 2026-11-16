@@ -36,6 +36,9 @@
           :loading="loading"
           :bordered="false"
           :scroll-x="1100"
+          remote
+          :pagination="pagination"
+          @update:page="changePage"
         />
       </div>
     </div>
@@ -44,7 +47,7 @@
       v-model:show="showCreate"
       preset="card"
       content-scrollable
-      title="新建定时发送"
+      :title="editingId ? '编辑定时发送' : '新建定时发送'"
       class="modal-allow-overflow"
       style="width: min(560px, calc(100vw - 24px))"
       :mask-closable="false"
@@ -54,6 +57,7 @@
           <n-select
             v-model:value="form.projectId"
             :options="projectOptions"
+            :disabled="!!editingId"
             placeholder="选择项目"
             @update:value="onProjectChange"
           />
@@ -64,6 +68,7 @@
             clearable
             :options="channelOptions"
             :loading="loadingChannels"
+            :disabled="!!editingId"
             :placeholder="channelPlaceholder"
           />
           <div class="mt-1 text-xs text-slate-400">
@@ -88,13 +93,13 @@
         </n-form-item>
         <n-form-item label="每日重复">
           <n-switch v-model:value="form.daily" />
-          <span class="ml-2 text-xs text-slate-400">开启后 cron=daily，成功后顺延 24 小时</span>
+          <span class="ml-2 text-xs text-slate-400">每日执行；停机期间错过的任务合并一次</span>
         </n-form-item>
       </n-form>
       <template #footer>
         <n-space justify="end">
           <n-button @click="showCreate = false">取消</n-button>
-          <n-button type="primary" :loading="creating" @click="create">创建</n-button>
+          <n-button type="primary" :loading="creating" @click="create">{{ editingId ? '保存' : '创建' }}</n-button>
         </n-space>
       </template>
     </n-modal>
@@ -128,6 +133,9 @@ const list = ref<any[]>([]);
 const loading = ref(false);
 const showCreate = ref(false);
 const creating = ref(false);
+const editingId = ref<string | null>(null);
+const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0 });
+function changePage(page: number) { pagination.page = page; void load(); }
 const loadingChannels = ref(false);
 const message = useMessage();
 const dialog = useDialog();
@@ -152,6 +160,8 @@ const form = reactive({
 const statusOptions = [
   { label: '待执行', value: 'PENDING' },
   { label: '执行中', value: 'RUNNING' },
+  { label: '已暂停', value: 'PAUSED' },
+  { label: '结果待核实', value: 'UNCERTAIN' },
   { label: '成功', value: 'SUCCESS' },
   { label: '失败', value: 'FAILED' },
   { label: '已取消', value: 'CANCELLED' },
@@ -243,32 +253,30 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 100,
+    width: 220,
     fixed: 'right' as const,
-    render: (r: any) =>
-      r.status === 'PENDING'
-        ? h(
-            NButton,
-            {
-              size: 'small',
-              type: 'error',
-              secondary: true,
-              onClick: () => cancel(r),
-            },
-            { default: () => '取消' },
-          )
-        : h('span', { class: 'text-slate-300' }, '-'),
+    render: (r: any) => ['PENDING', 'PAUSED'].includes(r.status)
+      ? h(NSpace, {}, { default: () => [
+          h(NButton, { size: 'small', onClick: () => edit(r) }, { default: () => '编辑' }),
+          h(NButton, { size: 'small', onClick: () => togglePause(r) }, { default: () => r.status === 'PAUSED' ? '恢复' : '暂停' }),
+          h(NButton, { size: 'small', type: 'error', onClick: () => cancel(r) }, { default: () => '取消' }),
+        ] }) : r.status === 'UNCERTAIN' ? h(NSpace, {}, { default: () => [
+          h(NButton, { size: 'small', onClick: () => resolveUncertain(r, 'delivered') }, { default: () => '确认已送达' }),
+          h(NButton, { size: 'small', type: 'warning', onClick: () => resolveUncertain(r, 'retry') }, { default: () => '确认后重试' }),
+        ] }) : h('span', { class: 'text-slate-300' }, '-'),
   },
 ];
 
 async function load() {
   loading.value = true;
   try {
-    list.value =
-      (await schedulesApi.list({
+    const result: any = await schedulesApi.list({
         projectId: filters.projectId || undefined,
         status: filters.status || undefined,
-      })) || [];
+        page: pagination.page, pageSize: pagination.pageSize,
+      });
+    list.value = result?.items || [];
+    pagination.itemCount = result?.total || 0;
   } catch (e: any) {
     message.error(e.message);
   } finally {
@@ -302,11 +310,41 @@ async function onProjectChange(v: string | null) {
 }
 
 function openCreate() {
+  editingId.value = null;
   if (!form.projectId && projectOptions.value[0]) {
     form.projectId = projectOptions.value[0].value;
   }
   void loadProjectChannels(form.projectId);
   showCreate.value = true;
+}
+
+async function edit(row: any) {
+  editingId.value = row.id;
+  form.projectId = row.projectId;
+  await loadProjectChannels(row.projectId);
+  Object.assign(form, { channelType: row.channelType, title: row.title || '', content: row.content || '', runAt: new Date(row.runAt).getTime(), daily: row.cron === 'daily' });
+  showCreate.value = true;
+}
+async function togglePause(row: any) {
+  try { await (row.status === 'PAUSED' ? schedulesApi.resume(row.id) : schedulesApi.pause(row.id)); await load(); }
+  catch (e: any) { message.error(e.message); }
+}
+
+function resolveUncertain(row: any, action: 'delivered' | 'retry') {
+  dialog.warning({
+    title: action === 'retry' ? '确认重复发送风险' : '确认已核实送达',
+    content: action === 'retry'
+      ? `「${row.title || row.id}」可能已经发送成功。重试可能让收件人再次收到同一通知。请先检查接收端，再确认是否立即重试。`
+      : `请确认已通过接收端或服务商记录核实「${row.title || row.id}」已经送达。此操作仅记录核实结果。`,
+    positiveText: action === 'retry' ? '接受重复风险并重试' : '已核实送达',
+    negativeText: '返回',
+    onPositiveClick: async () => {
+      try {
+        await schedulesApi.resolve(row.id, { action, ...(action === 'retry' ? { acknowledgeDuplicateRisk: true } : {}) });
+        message.success(action === 'retry' ? '已重新排程' : '已记录核实结果'); await load();
+      } catch (e: any) { message.error(e.message); }
+    },
+  });
 }
 
 async function create() {
@@ -318,21 +356,25 @@ async function create() {
     message.warning('请选择执行时间');
     return;
   }
-  if (form.channelType && !projectChannelTypes.value.includes(form.channelType)) {
+  if (!editingId.value && form.channelType && !projectChannelTypes.value.includes(form.channelType)) {
     message.warning('所选渠道类型未在该项目启用，请先到项目详情绑定');
     return;
   }
   creating.value = true;
   try {
-    await schedulesApi.create({
-      projectId: form.projectId,
+    const data = {
       channelType: form.channelType || undefined,
       title: form.title,
       content: form.content,
       runAt: new Date(form.runAt).toISOString(),
-      cron: form.daily ? 'daily' : undefined,
-    });
-    message.success('已创建');
+      cron: form.daily ? 'daily' : null,
+    };
+    if (editingId.value) {
+      const { channelType, ...editable } = data;
+      await schedulesApi.update(editingId.value, editable);
+    }
+    else await schedulesApi.create({ ...data, projectId: form.projectId });
+    message.success(editingId.value ? '已保存' : '已创建');
     showCreate.value = false;
     await load();
   } catch (e: any) {

@@ -83,9 +83,9 @@ export class ChannelHealthService implements OnModuleInit, OnModuleDestroy {
     let error: string | null = null;
     try {
       const adapter = this.adapters.get(ch.type);
-      const r = await adapter.test((ch.config || {}) as Record<string, unknown>);
-      ok = !!r.success;
-      error = r.success ? null : sanitizeErrorMessage(r.errorMessage);
+      adapter.validateConfig((ch.config || {}) as Record<string, unknown>);
+      ok = true;
+      error = null;
     } catch (e: any) {
       ok = false;
       error = e?.message || String(e);
@@ -115,11 +115,9 @@ export class ChannelHealthService implements OnModuleInit, OnModuleDestroy {
     }
 
     // 连续失败 ≥2：向绑定了该渠道的项目推备用告警（冷却用 lastFailAlertAt）
-    if (!ok && streak >= 2) {
-      await this.alertProjects(ch.id, ch.name, error);
-    }
+    // Passive configuration checks only; explicit channel tests own real sends.
 
-    return { channelId: ch.id, name: ch.name, type: ch.type, ok, ms, error, streak };
+    return { channelId: ch.id, name: ch.name, type: ch.type, ok, ms, error, streak, scope: 'configuration', deliveryVerified: false };
   }
 
   private async alertProjects(channelId: string, name: string, error: string | null) {

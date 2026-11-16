@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { randomUUID } from 'crypto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class IdempotencyService {
@@ -18,12 +20,14 @@ export class IdempotencyService {
     ttlMin: number;
   }): Promise<
     | { hit: true; response: any; messageId?: string | null }
-    | { hit: false; inFlight?: boolean }
+    | { hit: false; inFlight?: boolean; owner?: string }
   > {
     const key = opts.key.trim().slice(0, 200);
+    if (opts.key.trim().length > 200) throw new Error('幂等键不能超过 200 字符');
     if (!key) return { hit: false };
 
     const now = new Date();
+    const owner = randomUUID();
     const expiresAt = new Date(now.getTime() + Math.max(1, opts.ttlMin || 30) * 60_000);
 
     const existing = await this.prisma.idempotencyRecord.findUnique({
@@ -33,6 +37,9 @@ export class IdempotencyService {
     });
 
     if (existing) {
+      // An incomplete attempt may already have reached the provider. Do not
+      // reclaim it automatically merely because its response TTL elapsed.
+      if (existing.response == null) return { hit: false, inFlight: true };
       if (existing.expiresAt > now) {
         if (existing.response != null) {
           return {
@@ -51,9 +58,10 @@ export class IdempotencyService {
         },
         data: {
           expiresAt,
-          response: null as any,
+          response: Prisma.DbNull,
           messageId: null,
-        },
+          owner,
+        } as any,
       });
       if (claimed.count === 0) {
         // 被别人抢走
@@ -65,7 +73,7 @@ export class IdempotencyService {
         }
         return { hit: false, inFlight: true };
       }
-      return { hit: false };
+      return { hit: false, owner };
     }
 
     try {
@@ -74,9 +82,10 @@ export class IdempotencyService {
           projectId: opts.projectId,
           key,
           expiresAt,
-        },
+          owner,
+        } as any,
       });
-      return { hit: false };
+      return { hit: false, owner };
     } catch (e: any) {
       const again = await this.prisma.idempotencyRecord.findUnique({
         where: { projectId_key: { projectId: opts.projectId, key } },
@@ -98,39 +107,36 @@ export class IdempotencyService {
     messageId?: string | null;
     response: unknown;
     ttlMin: number;
+    owner?: string;
   }) {
     const key = opts.key.trim().slice(0, 200);
     if (!key) return;
     const expiresAt = new Date(
       Date.now() + Math.max(1, opts.ttlMin || 30) * 60_000,
     );
-    await this.prisma.idempotencyRecord.upsert({
-      where: { projectId_key: { projectId: opts.projectId, key } },
-      create: {
-        projectId: opts.projectId,
-        key,
-        messageId: opts.messageId || null,
-        response: opts.response as any,
-        expiresAt,
-      },
-      update: {
+    if (!opts.owner) throw new Error('Missing idempotency owner');
+    const result = await this.prisma.idempotencyRecord.updateMany({
+      where: { projectId: opts.projectId, key, owner: opts.owner } as any,
+      data: {
         messageId: opts.messageId || null,
         response: opts.response as any,
         expiresAt,
       },
     });
+    if (!result.count) throw new Error('Idempotency ownership lost');
   }
 
-  async release(opts: { projectId: string; key: string }) {
+  async release(opts: { projectId: string; key: string; owner?: string }) {
     const key = opts.key.trim().slice(0, 200);
-    if (!key) return;
+    if (!key || !opts.owner) return;
     try {
       await this.prisma.idempotencyRecord.deleteMany({
         where: {
           projectId: opts.projectId,
           key,
-          response: { equals: null as any },
-        },
+          owner: opts.owner,
+          response: { equals: Prisma.DbNull },
+        } as any,
       });
     } catch (e: any) {
       this.logger.warn(`idempotency release: ${e?.message || e}`);
@@ -139,7 +145,7 @@ export class IdempotencyService {
 
   async cleanupExpired() {
     await this.prisma.idempotencyRecord.deleteMany({
-      where: { expiresAt: { lt: new Date() } },
+      where: { expiresAt: { lt: new Date() }, messageId: { not: null } },
     });
   }
 }

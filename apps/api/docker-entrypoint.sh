@@ -4,16 +4,13 @@ set -e
 echo "[api] starting entrypoint..."
 echo "[api] NODE_ENV=${NODE_ENV:-} APP_ENV=${APP_ENV:-} PORT=${PORT:-3010}"
 if [ -n "$DATABASE_URL" ]; then
-  echo "[api] DATABASE_URL=$(echo "$DATABASE_URL" | sed -E 's#(postgresql://[^:]+:)[^@]+@#\1****@#')"
+  echo "[api] DATABASE_URL configured"
 else
   echo "[api] DATABASE_URL is empty!" >&2
 fi
 
-if [ ! -f /app/node_modules/prisma/build/index.js ]; then
-  echo "[api] prisma CLI missing, installing..." >&2
-  npm install prisma@5.22.0 --no-save --no-audit --no-fund
-  npx prisma generate
-fi
+test -f /app/node_modules/prisma/build/index.js || { echo "[api] Prisma missing in image" >&2; exit 1; }
+node -e 'require("./dist/src/common/env").validateSecurityEnvironment(process.env)'
 
 i=0
 until node /app/wait-db.js; do
@@ -28,14 +25,10 @@ done
 echo "[api] database TCP ready"
 
 echo "[api] prisma migrate deploy"
-npx prisma migrate deploy
+node node_modules/prisma/build/index.js migrate deploy
 
-echo "[api] seed (non-fatal)"
-if [ -f /app/prisma/seed.js ]; then
-  node /app/prisma/seed.js || echo "[api] seed failed (ignored)"
-else
-  echo "[api] seed.js missing, skip"
-fi
+echo "[api] seed"
+node /app/dist/prisma/seed.js
 
 if [ ! -f /app/dist/src/main.js ]; then
   echo "[api] FATAL: /app/dist/src/main.js missing" >&2

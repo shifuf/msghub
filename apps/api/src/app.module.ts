@@ -21,13 +21,16 @@ import { ActivityModule } from './activity/activity.module';
 import { EmailPolicyModule } from './email-policy/email-policy.module';
 import { EventsModule } from './events/events.module';
 import { SiteModule } from './site/site.module';
-import { resolveThrottle } from './common/env';
+import { resolveThrottle, validateSecurityEnvironment } from './common/env';
+import { RedisThrottleModule, RedisThrottleStorage } from './common/redis-throttle.storage';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'] }),
+    ConfigModule.forRoot({ isGlobal: true, envFilePath: ['.env', '../../.env'], validate: validateSecurityEnvironment }),
     ThrottlerModule.forRootAsync({
-      useFactory: () => [resolveThrottle()],
+      imports: [RedisThrottleModule],
+      inject: [RedisThrottleStorage],
+      useFactory: (storage: RedisThrottleStorage) => ({ throttlers: [resolveThrottle()], storage }),
     }),
     PrismaModule,
     QueueModule.register(),

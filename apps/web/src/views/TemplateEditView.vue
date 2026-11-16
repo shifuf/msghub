@@ -13,7 +13,8 @@
       </div>
       <n-space>
         <n-button secondary @click="preview">预览</n-button>
-        <n-button type="primary" :loading="saving" @click="save">保存</n-button>
+        <n-button :loading="saving" @click="save">保存草稿</n-button>
+        <n-button type="primary" :loading="saving" @click="publish">发布</n-button>
       </n-space>
     </div>
 
@@ -66,11 +67,15 @@
           <n-input v-model:value="previewVars" type="textarea" :rows="6" class="font-mono text-xs" />
         </n-form-item>
         <div class="text-sm text-gray-500">主题：{{ previewResult.subject || '-' }}</div>
+        <div class="flex gap-2 items-center">
+          <n-select v-model:value="rollbackRevision" :options="versions.map(v => ({ label: `版本 ${v.revision} · ${new Date(v.createdAt).toLocaleString()}`, value: v.revision }))" placeholder="选择历史版本" />
+          <n-button :disabled="!rollbackRevision" @click="rollback">回滚并发布</n-button>
+        </div>
         <div class="border rounded-lg overflow-hidden bg-gray-50 min-h-[320px]">
-          <iframe
+          <SafeHtmlPreview
             v-if="previewResult.html"
             class="w-full h-[420px] bg-white"
-            :srcdoc="previewResult.html"
+            :html="previewResult.html"
           />
           <div v-else class="p-6 text-gray-400 text-sm">点击「预览」查看渲染结果</div>
         </div>
@@ -105,6 +110,7 @@
 </template>
 
 <script setup lang="ts">
+import SafeHtmlPreview from '@/components/SafeHtmlPreview.vue';
 import { onMounted, reactive, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import {
@@ -116,6 +122,7 @@ import {
   NSpace,
   NSwitch,
   NTag,
+  NSelect,
   useMessage,
 } from 'naive-ui';
 import { templatesApi } from '@/api';
@@ -124,6 +131,8 @@ const route = useRoute();
 const id = String(route.params.id);
 const tpl = ref<any>(null);
 const saving = ref(false);
+const versions = ref<any[]>([]);
+const rollbackRevision = ref<number | null>(null);
 const message = useMessage();
 const form = reactive({
   name: '',
@@ -157,8 +166,10 @@ const previewVars = ref(
 const previewResult = reactive({ subject: '', html: '' });
 
 async function load() {
-  const data: any = await templatesApi.get(id);
-  tpl.value = data;
+  const published: any = await templatesApi.get(id);
+  tpl.value = published;
+  const data = { ...published, ...(published.draft || {}) };
+  versions.value = (await templatesApi.versions(id)) || [];
   form.name = data.name;
   form.subject = data.subject;
   form.htmlBody = data.htmlBody;
@@ -197,7 +208,7 @@ function removeVar(index: number) {
 async function save() {
   saving.value = true;
   try {
-    await templatesApi.update(id, {
+    await templatesApi.draft(id, {
       name: form.name,
       subject: form.subject,
       htmlBody: form.htmlBody,
@@ -205,13 +216,27 @@ async function save() {
       enabled: form.enabled,
       variables: [...varList.value],
     });
-    message.success('已保存');
+    message.success('草稿已保存');
     await load();
   } catch (e: any) {
     message.error(e.message);
   } finally {
     saving.value = false;
   }
+}
+
+async function publish() {
+  saving.value = true;
+  try {
+    await templatesApi.draft(id, { ...form, variables: [...varList.value] });
+    await templatesApi.publish(id); await load(); message.success('已发布');
+  } catch (e: any) { message.error(e.message); }
+  finally { saving.value = false; }
+}
+async function rollback() {
+  if (!rollbackRevision.value) return;
+  try { await templatesApi.rollback(id, rollbackRevision.value); await load(); message.success('已回滚为新版本'); }
+  catch (e: any) { message.error(e.message); }
 }
 
 async function preview() {
@@ -223,7 +248,7 @@ async function preview() {
       message.error('预览变量 JSON 无效');
       return;
     }
-    await templatesApi.update(id, {
+    await templatesApi.draft(id, {
       name: form.name,
       subject: form.subject,
       htmlBody: form.htmlBody,

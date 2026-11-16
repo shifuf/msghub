@@ -98,6 +98,10 @@
         </n-form>
 
         <div class="mt-4 space-y-3">
+          <div v-if="editingId" class="flex gap-2">
+            <n-select v-model:value="rollbackRevision" :options="versions.map(v => ({ label: `版本 ${v.revision}`, value: v.revision }))" placeholder="历史版本" />
+            <n-button :disabled="!rollbackRevision" @click="rollback">回滚并发布</n-button>
+          </div>
           <div class="text-sm font-semibold text-slate-800">预览</div>
           <n-input
             v-model:value="previewVarsText"
@@ -121,7 +125,8 @@
         <template #footer>
           <n-space justify="end">
             <n-button @click="showDrawer = false">取消</n-button>
-            <n-button type="primary" :loading="saving" @click="save">保存</n-button>
+            <n-button v-if="editingId" :loading="saving" @click="saveDraft">保存草稿</n-button>
+            <n-button type="primary" :loading="saving" @click="save">{{ editingId ? '发布' : '创建' }}</n-button>
           </n-space>
         </template>
       </n-drawer-content>
@@ -157,8 +162,10 @@ const saving = ref(false);
 const previewing = ref(false);
 const togglingId = ref<string | null>(null);
 const editingId = ref<string | null>(null);
+const versions = ref<any[]>([]);
+const rollbackRevision = ref<number | null>(null);
 const filterProjectId = ref<string | null>(null);
-const filterEnabled = ref<boolean | null>(null);
+const filterEnabled = ref<string | null>(null);
 const projectOptions = ref<{ label: string; value: string }[]>([]);
 const message = useMessage();
 const dialog = useDialog();
@@ -183,8 +190,8 @@ const form = reactive({
 });
 
 const enabledOptions = [
-  { label: '仅启用', value: true },
-  { label: '仅禁用', value: false },
+  { label: '仅启用', value: 'true' },
+  { label: '仅禁用', value: 'false' },
 ];
 
 const filterProjectOptions = computed(() => [
@@ -253,7 +260,7 @@ async function load() {
     const params: { projectId?: string; enabled?: boolean } = {};
     if (filterProjectId.value) params.projectId = filterProjectId.value;
     if (filterEnabled.value !== null && filterEnabled.value !== undefined) {
-      params.enabled = filterEnabled.value;
+      params.enabled = filterEnabled.value === 'true';
     }
     list.value = (await pushTemplatesApi.list(params)) || [];
   } catch (e: any) {
@@ -274,6 +281,7 @@ function resetForm() {
 }
 
 function openCreate() {
+  versions.value = []; rollbackRevision.value = null;
   editingId.value = null;
   resetForm();
   form.projectId =
@@ -296,7 +304,11 @@ function openCreate() {
   showDrawer.value = true;
 }
 
-function openEdit(row: any) {
+async function openEdit(row: any) {
+  versions.value = []; rollbackRevision.value = null;
+  try { versions.value = (await pushTemplatesApi.versions(row.id)) || []; }
+  catch (e: any) { message.error(e.message); }
+  row = { ...row, ...(row.draft || {}) };
   editingId.value = row.id;
   form.code = row.code;
   form.name = row.name;
@@ -389,6 +401,25 @@ async function save() {
   }
 }
 
+async function saveDraft() {
+  if (!editingId.value) return;
+  saving.value = true;
+  try {
+    await pushTemplatesApi.draft(editingId.value, { name: form.name, titleTpl: form.titleTpl, contentTpl: form.contentTpl, enabled: form.enabled });
+    message.success('草稿已保存'); await load();
+  } catch (e: any) { message.error(e.message); }
+  finally { saving.value = false; }
+}
+async function rollback() {
+  if (!editingId.value || !rollbackRevision.value) return;
+  try {
+    const row: any = await pushTemplatesApi.rollback(editingId.value, rollbackRevision.value);
+    Object.assign(form, { name: row.name, titleTpl: row.titleTpl, contentTpl: row.contentTpl, enabled: row.enabled });
+    versions.value = (await pushTemplatesApi.versions(editingId.value)) || [];
+    await load(); message.success('已回滚为新版本');
+  } catch (e: any) { message.error(e.message); }
+}
+
 async function toggleEnabled(row: any, enabled: boolean) {
   togglingId.value = row.id;
   try {
@@ -413,6 +444,7 @@ async function doPreview() {
   }
   previewing.value = true;
   try {
+    await pushTemplatesApi.draft(editingId.value, { name: form.name, titleTpl: form.titleTpl, contentTpl: form.contentTpl, enabled: form.enabled });
     previewResult.value = (await pushTemplatesApi.preview(editingId.value, variables)) || null;
   } catch (e: any) {
     message.error(e.message);

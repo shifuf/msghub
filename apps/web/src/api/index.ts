@@ -3,11 +3,15 @@ import axios from 'axios';
 import { useAuthStore } from '@/stores/auth';
 
 export const authApi = {
-  login: (username: string, password: string) =>
-    http.post('/admin/auth/login', { username, password }),
+  login: (username: string, password: string, code?: string) =>
+    http.post('/admin/auth/login', { username, password, ...(code ? { code } : {}) }),
   me: () => http.get('/admin/auth/me'),
   changePassword: (oldPassword: string, newPassword: string) =>
     http.post('/admin/auth/change-password', { oldPassword, newPassword }),
+  revokeSessions: () => http.post('/admin/auth/revoke-sessions'),
+  setupTotp: (password: string) => http.post('/admin/auth/totp/setup', { password }),
+  enableTotp: (code: string) => http.post('/admin/auth/totp/enable', { code }),
+  disableTotp: (password: string, code: string) => http.post('/admin/auth/totp/disable', { password, code }),
 };
 
 /** 健康检查（公共 /api，无需管理端鉴权） */
@@ -17,11 +21,15 @@ export const healthApi = {
 
 export const dashboardApi = {
   stats: () => http.get('/admin/dashboard/stats'),
-  notifications: (params: { since?: string; limit?: number } = {}) =>
+  notifications: (params: { since?: string; cursor?: string; limit?: number } = {}) =>
     http.get('/admin/dashboard/notifications', { params }),
   charts: (days = 7) => http.get('/admin/dashboard/charts', { params: { days } }),
   errorClusters: (days = 7) =>
     http.get('/admin/dashboard/error-clusters', { params: { days } }),
+};
+
+export const realtimeApi = {
+  ticket: () => http.post('/admin/realtime/ticket'),
 };
 
 export const projectsApi = {
@@ -108,6 +116,10 @@ export const channelsApi = {
 };
 
 export const templatesApi = {
+  versions: (id: string) => http.get(`/admin/templates/${id}/versions`),
+  draft: (id: string, data: any) => http.put(`/admin/templates/${id}/draft`, data),
+  publish: (id: string) => http.post(`/admin/templates/${id}/publish`),
+  rollback: (id: string, revision: number) => http.post(`/admin/templates/${id}/rollback`, { revision }),
   list: (
     params:
       | { projectId?: string; enabled?: boolean; includeGlobal?: boolean }
@@ -135,6 +147,10 @@ export const templatesApi = {
 };
 
 export const pushTemplatesApi = {
+  versions: (id: string) => http.get(`/admin/push-templates/${id}/versions`),
+  draft: (id: string, data: any) => http.put(`/admin/push-templates/${id}/draft`, data),
+  publish: (id: string) => http.post(`/admin/push-templates/${id}/publish`),
+  rollback: (id: string, revision: number) => http.post(`/admin/push-templates/${id}/rollback`, { revision }),
   list: (
     params:
       | { projectId?: string; enabled?: boolean; includeGlobal?: boolean }
@@ -161,11 +177,15 @@ export const pushTemplatesApi = {
 };
 
 export const messagesApi = {
+  retention: () => http.get('/admin/messages/retention'),
+  setRetention: (days: number) => http.post('/admin/messages/retention', { days }),
+  timeline: (id: string) => http.get(`/admin/messages/${id}/timeline`),
   list: (params: Record<string, any> = {}) =>
     http.get('/admin/messages', { params }),
   get: (id: string) => http.get(`/admin/messages/${id}`),
   send: (data: any) => http.post('/admin/messages/send', data),
   batch: (data: any) => http.post('/admin/messages/batch', data),
+  batchPreview: (data: any) => http.post('/admin/messages/batch-preview', data),
   batchResend: (data: any) => http.post('/admin/messages/batch-resend', data),
   resend: (id: string) => http.post(`/admin/messages/${id}/resend`),
   resendUnread: (id: string) => http.post(`/admin/messages/${id}/resend-unread`),
@@ -203,15 +223,28 @@ export const projectHealthApi = {
 };
 
 export const schedulesApi = {
+  resolve: (id: string, data: { action: 'delivered' | 'retry'; acknowledgeDuplicateRisk?: boolean }) => http.post(`/admin/schedules/${id}/resolve`, data),
   list: (params: Record<string, any> = {}) =>
     http.get('/admin/schedules', { params }),
   create: (data: any) => http.post('/admin/schedules', data),
   cancel: (id: string) => http.delete(`/admin/schedules/${id}`),
   get: (id: string) => http.get(`/admin/schedules/${id}`),
+  update: (id: string, data: any) => http.patch(`/admin/schedules/${id}`, data),
+  pause: (id: string) => http.post(`/admin/schedules/${id}/pause`),
+  resume: (id: string) => http.post(`/admin/schedules/${id}/resume`),
+};
+
+export const queueApi = {
+  stats: () => http.get('/admin/queue/stats'),
+  failed: () => http.get('/admin/queue/failed', { params: { limit: 200 } }),
+  delayed: () => http.get('/admin/queue/delayed', { params: { limit: 200 } }),
+  retry: (id: string) => http.post(`/admin/queue/failed/${encodeURIComponent(id)}/retry`),
+  remove: (id: string) => http.post(`/admin/queue/failed/${encodeURIComponent(id)}/remove`),
 };
 
 export const backupApi = {
-  export: () => http.get('/admin/backup/export'),
+  export: (options: { password?: string; redact?: boolean } = {}) => http.post('/admin/backup/export', options),
+  preview: (data: any) => http.post('/admin/backup/preview', data),
   import: (data: any) => http.post('/admin/backup/import', data),
 };
 

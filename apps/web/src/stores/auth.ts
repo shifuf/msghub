@@ -7,6 +7,7 @@ const TOKEN_KEY = 'msg_admin_token';
 export type AdminUser = {
   id: string;
   username: string;
+  totpEnabled?: boolean;
   lastLoginAt?: string | null;
   createdAt?: string;
 };
@@ -27,8 +28,8 @@ export const useAuthStore = defineStore('auth', () => {
     localStorage.setItem(TOKEN_KEY, t);
   }
 
-  async function login(username: string, password: string) {
-    const res = await authApi.login(username, password);
+  async function login(username: string, password: string, code?: string) {
+    const res = await authApi.login(username, password, code);
     if (!res?.accessToken) {
       throw new Error('登录响应缺少 accessToken');
     }

@@ -1,5 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
+import { isProduction, validateSecurityEnvironment } from '../src/common/env';
 
 const prisma = new PrismaClient();
 
@@ -68,18 +69,22 @@ const DEFAULT_TEMPLATES = [
 ];
 
 async function main() {
+  validateSecurityEnvironment(process.env);
   const username = process.env.ADMIN_USERNAME || 'admin';
   const password = process.env.ADMIN_PASSWORD || 'ChangeMe@123456';
   const passwordHash = await bcrypt.hash(password, 10);
 
   const forceReset = process.env.FORCE_RESET_ADMIN_PASSWORD === 'true';
   const existing = await prisma.adminUser.findFirst({ orderBy: { createdAt: 'asc' } });
+  if ((!existing || forceReset) && isProduction() && !process.env.ADMIN_PASSWORD) {
+    throw new Error('首次初始化或重置管理员时必须显式设置 ADMIN_PASSWORD');
+  }
   if (existing) {
-    await prisma.adminUser.deleteMany({ where: { NOT: { id: existing.id } } });
+    // Preserve existing users; seed must never silently delete account records.
     if (forceReset) {
       await prisma.adminUser.update({
         where: { id: existing.id },
-        data: { username, passwordHash },
+        data: { username, passwordHash, tokenVersion: { increment: 1 } },
       });
       console.log('Admin password force-reset by FORCE_RESET_ADMIN_PASSWORD');
     } else if (existing.username !== username) {

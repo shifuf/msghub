@@ -16,6 +16,8 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
     let code = 'INTERNAL_ERROR';
     let message = '服务器内部错误';
+    let data: unknown = null;
+    let structured = false;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
@@ -24,16 +26,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
         message = body;
       } else if (body && typeof body === 'object') {
         const b = body as any;
-        message = Array.isArray(b.message) ? b.message.join('; ') : b.message || message;
-        code = b.error || b.code || HttpStatus[status] || code;
+        structured = !!(b.error && typeof b.error === 'object' && typeof b.error.code === 'string');
+        const candidate = structured ? b.error.message : b.message;
+        message = Array.isArray(candidate) ? candidate.join('; ') : typeof candidate === 'string' ? candidate : message;
+        code = structured ? b.error.code : typeof b.code === 'string' ? b.code : typeof b.error === 'string' ? b.error : HttpStatus[status] || code;
+        if (structured && b.data !== undefined) data = b.data;
       }
-    } else if (exception instanceof Error) {
-      message = exception.message;
+    }
+
+    if (status >= 500 && !structured) {
+      code = 'INTERNAL_ERROR';
+      message = '服务器内部错误';
+      data = null;
     }
 
     res.status(status).json({
       success: false,
-      data: null,
+      data,
       error: { code, message },
     });
   }

@@ -237,7 +237,8 @@ export class TemplatesService {
   }
 
   async preview(id: string, variables: Record<string, unknown> = {}) {
-    const t = await this.get(id);
+    const live = await this.get(id);
+    const t = { ...live, ...(live.draft && typeof live.draft === 'object' && !Array.isArray(live.draft) ? live.draft as Record<string, any> : {}) };
     return {
       subject: this.render(t.subject, variables),
       html: this.render(t.htmlBody, variables),

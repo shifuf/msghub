@@ -1,10 +1,11 @@
 # syntax=docker/dockerfile:1
-FROM node:20-alpine AS build
+FROM node:22-alpine AS build
 RUN corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /app
-COPY package.json pnpm-workspace.yaml ./
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
-RUN pnpm install --filter @msg/web... --frozen-lockfile=false
+RUN pnpm install --filter @msg/web... --frozen-lockfile
 COPY apps/web ./apps/web
 WORKDIR /app/apps/web
 RUN pnpm build

@@ -169,16 +169,6 @@ const columns = [
     key: 'readAt',
     width: 190,
     render: (r: any) => {
-      if (r.emailFallback || r.readVia === 'email_fallback') {
-        return h(
-          NTag,
-          { size: 'small', type: 'info' },
-          {
-            default: () =>
-              `邮箱兜底已读${r.emailFallbackAt ? ' · ' + formatTime(r.emailFallbackAt) : ''}`,
-          },
-        );
-      }
       if (r.readAt) {
         return h(NTag, { size: 'small', type: 'success' }, {
           default: () => formatTime(r.readAt),
@@ -240,12 +230,10 @@ const columns = [
               { default: () => '复制 RID' },
             ),
           ];
-          // 已读或已邮件兜底的记录不允许重发
+          // 邮件送达与已读分开；是否允许重发由服务端策略决定。
           const locked =
             r.canResend === false ||
             !!r.readAt ||
-            !!r.emailFallback ||
-            r.readVia === 'email_fallback' ||
             !r.unread;
           if (!locked) {
             btns.push(
@@ -324,8 +312,8 @@ async function markRead(row: any) {
 }
 
 async function resendUnread(row: any) {
-  if (row.emailFallback || row.readAt || row.canResend === false) {
-    message.warning('已读或已邮箱兜底，无法重发');
+    if (row.readAt || row.canResend === false) {
+    message.warning('当前记录不可重发');
     return;
   }
   try {

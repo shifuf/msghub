@@ -129,7 +129,7 @@ server {
 
 ## 本地开发
 
-环境要求：Node.js ≥ 18、pnpm 9、Docker（仅用于 Postgres + Redis）。
+环境要求：Node.js ≥ 22.22、pnpm 9.15+、Docker（用于 Postgres + Redis；也可使用本机独立服务）。
 
 ```bash
 # 1. 依赖
@@ -224,6 +224,8 @@ curl -X POST "https://你的域名/api/email" \
 
 ## 环境变量说明
 
+2026-11-17 安全与可靠性升级请先阅读 [升级与验收](docs/升级与验收-2026-11-17.md) 和 [28项修复映射](docs/修复验收矩阵-2026-11-17.md)。
+
 完整注释见 [`.env.example`](./.env.example)。常用项：
 
 | 变量 | 说明 | 默认 |
@@ -231,8 +233,11 @@ curl -X POST "https://你的域名/api/email" \
 | `APP_ENV` | `development` / `production`，决定 CORS、默认端口等 | 开发 `development`；Compose `production` |
 | `JWT_SECRET` | JWT 签名密钥（生产必改） | — |
 | `ADMIN_USERNAME` | seed 默认管理员用户名 | `admin` |
-| `ADMIN_PASSWORD` | seed 默认管理员密码 | `ChangeMe@123456` |
-| `SITE_URL` | 对外站点根地址（退订链接等，可选） | 空=自动 |
+| `ADMIN_PASSWORD` | 生产首次初始化必填，至少12字符且不能使用示例密码 | 开发示例仅供本机使用 |
+| `SITE_URL` | 对外 HTTPS 根地址，邮件退订及浏览器回执必须可访问 | 生产无自动域名 |
+| `TOTP_ENCRYPTION_KEY` | 独立随机密钥，保护双因素认证配置；需要安全备份 | 未设时从 JWT_SECRET 派生 |
+| `TRUST_PROXY` | 可信反向代理 IP/CIDR 清单 | 裸服务不信任代理；Compose 仅容器内网 |
+| `CORS_ORIGINS` | 跨域管理页面的完整 origin，逗号分隔 | 生产仅同源 |
 | `ADMIN_PATH` | 后台登录路径（Docker 重启 web 生效） | `/admin` |
 | `WEB_PORT` | web 容器宿主机端口 | `8185` |
 
@@ -240,7 +245,7 @@ curl -X POST "https://你的域名/api/email" \
 
 - API 容器端口固定 `3010`（不映射宿主机；外网走 web 反代）
 - 开发 CORS 自动放行 `localhost:5173` / `8185`
-- 生产 CORS 反射请求 Origin（同源反代最稳）
+- 生产默认仅同源访问，跨域必须显式设置 `CORS_ORIGINS`
 - 前端 API 基路径固定同源 `/api`
 
 ---
@@ -251,7 +256,7 @@ curl -X POST "https://你的域名/api/email" \
 .
 ├── apps/
 │   ├── api/                 # NestJS 后端
-│   │   ├── prisma/          # schema · 单一 init 迁移 · seed
+│   │   ├── prisma/          # schema · 向前迁移 · 统一 seed
 │   │   └── src/
 │   │       ├── adapters/    # 渠道适配器
 │   │       ├── messages/    # 发送核心 / 策略
@@ -272,8 +277,8 @@ curl -X POST "https://你的域名/api/email" \
 - [ ] 设置 `APP_ENV=production`  
 - [ ] 修改 `JWT_SECRET` 为高强度随机串  
 - [ ] 修改 `ADMIN_PASSWORD`，登录后再次改密  
-- [ ] 设置 `ADMIN_PATH` 为不易猜测路径  
-- [ ] （可选）配置 `SITE_URL=https://你的域名`（邮件退订完整链接）  
+- [ ] 按需设置 `ADMIN_PATH`（仅入口定制，不替代鉴权）
+- [ ] 配置 `SITE_URL=https://你的域名`（邮件退订完整链接及设备回执）
 - [ ] 在后台配置至少一个外发渠道，并绑定到项目  
 - [ ] 创建项目 API Key，用 curl 做一次连通测试  
 - [ ] （可选）配置反向代理与 HTTPS  

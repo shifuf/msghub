@@ -16,10 +16,6 @@ services:
       POSTGRES_DB: msg_notify
     volumes:
       - msg_pg_data:/var/lib/postgresql/data
-    # 部分云主机/宝塔环境需放开，否则 initdb 报 Operation not permitted
-    security_opt:
-      - seccomp:unconfined
-      - apparmor:unconfined
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U msg -d msg_notify']
       interval: 5s
@@ -45,19 +41,22 @@ services:
       dockerfile: apps/api/Dockerfile
     restart: unless-stopped
     environment:
-      APP_ENV: ${APP_ENV:-production}
+      APP_ENV: production
       NODE_ENV: production
       # Docker 内固定走服务名，无需在 .env 写库地址
       DATABASE_URL: postgresql://msg:msg123456@postgres:5432/msg_notify?schema=public
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET:-change-me-in-production-please}
+      JWT_SECRET: ${JWT_SECRET:?请设置随机 JWT_SECRET}
       JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      TOTP_ENCRYPTION_KEY: ${TOTP_ENCRYPTION_KEY:-}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-ChangeMe@123456}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?请设置初始化管理员强密码}
       FORCE_RESET_ADMIN_PASSWORD: ${FORCE_RESET_ADMIN_PASSWORD:-false}
       SITE_URL: ${SITE_URL:-}
       PORT: 3010
+      TRUST_PROXY: ${TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
+      CORS_ORIGINS: ${CORS_ORIGINS:-}
     depends_on:
       postgres:
         condition: service_healthy

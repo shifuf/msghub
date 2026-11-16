@@ -8,6 +8,7 @@ import {
   Param,
   Query,
   UseGuards,
+  Put,
 } from '@nestjs/common';
 import { TemplatesService } from './templates.service';
 import {
@@ -19,11 +20,12 @@ import {
 } from './dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ok } from '../common/utils';
+import { TemplateVersionsService } from './template-versions.service';
 
 @UseGuards(JwtAuthGuard)
 @Controller('admin/templates')
 export class TemplatesController {
-  constructor(private templates: TemplatesService) {}
+  constructor(private templates: TemplatesService, private versions: TemplateVersionsService) {}
 
   @Get()
   async list(
@@ -59,8 +61,20 @@ export class TemplatesController {
 
   @Patch(':id')
   async update(@Param('id') id: string, @Body() dto: UpdateTemplateDto) {
-    return ok(await this.templates.update(id, dto));
+    return ok(await this.versions.publish('email', id, dto));
   }
+
+  @Get(':id/versions')
+  async history(@Param('id') id: string) { return ok(await this.versions.history('email', id)); }
+
+  @Put(':id/draft')
+  async draft(@Param('id') id: string, @Body() dto: UpdateTemplateDto) { return ok(await this.versions.saveDraft('email', id, dto)); }
+
+  @Post(':id/publish')
+  async publish(@Param('id') id: string) { return ok(await this.versions.publish('email', id)); }
+
+  @Post(':id/rollback')
+  async rollback(@Param('id') id: string, @Body() body: { revision: number }) { return ok(await this.versions.rollback('email', id, body?.revision)); }
 
   @Delete(':id')
   async remove(@Param('id') id: string) {

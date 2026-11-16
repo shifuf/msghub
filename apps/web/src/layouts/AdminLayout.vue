@@ -78,7 +78,7 @@
                     {{ notify.connected ? '实时' : '轮询' }}
                   </span>
                   <span class="text-xs text-slate-400" v-if="notify.pending">排队 {{ notify.pending }}</span>
-                  <n-button text size="tiny" type="primary" @click="notify.markAllRead()">全部已读</n-button>
+                  <n-button text size="tiny" type="primary" @click="markVisibleRead">当前列表已读</n-button>
                 </div>
               </div>
               <div v-if="!notify.items.length" class="notify-empty">暂无新通知</div>
@@ -136,7 +136,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, h, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   NMenu,
@@ -146,6 +146,7 @@ import {
   NPopover,
   NTag,
   useNotification,
+  useMessage,
 } from 'naive-ui';
 import { useAuthStore } from '@/stores/auth';
 import { useNotifyStore, type NotifyItem } from '@/stores/notify';
@@ -169,6 +170,7 @@ const router = useRouter();
 const auth = useAuthStore();
 const notify = useNotifyStore();
 const ntf = useNotification();
+const message = useMessage();
 
 const menuOptions = [
   { label: '仪表盘', key: 'dashboard', icon: renderIcon(Icons.home, 20) },
@@ -181,6 +183,7 @@ const menuOptions = [
   { label: '设备推送', key: 'device-push', icon: renderIcon(Icons.network, 20) },
   { label: '抑制名单', key: 'suppress', icon: renderIcon(Icons.mail, 20) },
   { label: '定时发送', key: 'schedules', icon: renderIcon(Icons.time, 20) },
+  { label: '发送队列', key: 'queue', icon: renderIcon(Icons.list, 20) },
   { label: '操作日志', key: 'activity', icon: renderIcon(Icons.list, 20) },
   { label: '合作站', key: 'partners', icon: renderIcon(Icons.link, 20) },
   { label: '系统设置', key: 'settings', icon: renderIcon(Icons.settings, 20) },
@@ -197,6 +200,7 @@ const activeKey = computed(() => {
   if (name === 'device-push') return 'device-push';
   if (name === 'suppress') return 'suppress';
   if (name === 'schedules') return 'schedules';
+  if (name === 'queue') return 'queue';
   if (name === 'activity') return 'activity';
   if (name === 'partners') return 'partners';
   if (name === 'settings') return 'settings';
@@ -218,6 +222,7 @@ const pageTitle = computed(() => {
     'device-push': '设备推送',
     suppress: '抑制名单',
     schedules: '定时发送',
+    queue: '发送队列',
     activity: '操作日志',
     partners: '合作站',
     settings: '系统设置',
@@ -239,6 +244,7 @@ function onMenu(key: string) {
     'device-push': '/device-push',
     suppress: '/suppress',
     schedules: '/schedules',
+    queue: '/queue',
     activity: '/activity',
     partners: '/partners',
     settings: '/settings',
@@ -267,7 +273,7 @@ function logout() {
 }
 
 function onPopoverShow(show: boolean) {
-  if (show) notify.bootstrap();
+  if (show) void notify.bootstrap().catch(() => message.error('通知刷新失败，请稍后重试'));
 }
 
 function clampText(s: string, n = 120) {
@@ -275,11 +281,15 @@ function clampText(s: string, n = 120) {
   return t.length > n ? t.slice(0, n - 1) + '…' : t;
 }
 
-function openNotify(item: NotifyItem) {
-  // 仅更新本地铃铛已读，不调用服务端 mark-read，避免误标设备推送已读
-  notify.markRead(item.id);
-  // 跳转发送记录并打开详情；设备推送不会在详情页自动服务端已读
+async function openNotify(item: NotifyItem) {
+  try { await notify.markRead(item.id); }
+  catch { message.warning('已读状态未同步，请稍后重试'); }
   router.push({ path: '/messages', query: { open: item.id } });
+}
+
+async function markVisibleRead() {
+  try { await notify.markAllRead(); }
+  catch { message.error('已读状态未同步，请稍后重试'); }
 }
 
 function onResize() {
@@ -317,7 +327,7 @@ watch(
         duration: 5000,
         keepAliveOnHover: true,
         meta: formatTime(item.createdAt),
-        onClick: () => openNotify(item),
+        action: () => h(NButton, { text: true, type: 'primary', onClick: () => openNotify(item) }, { default: () => '查看详情' }),
       });
     }
     if (fresh.length > 3) {

@@ -1,124 +1,87 @@
 import { lookup } from 'dns/promises';
 import { isIP } from 'net';
+import * as ipaddr from 'ipaddr.js';
+import { Agent, fetch as safeFetch } from 'undici';
 
 const DEFAULT_TIMEOUT = 15000;
+export type OutboundOptions = { allowHttp?: boolean; allowPrivate?: boolean; maxResponseBytes?: number };
 
 export function isPrivateHostname(hostname: string): boolean {
-  const h = String(hostname || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, '');
-  if (!h) return true;
-  if (h === 'localhost' || h === '0.0.0.0' || h === '::' || h === '::1') return true;
-  if (h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal')) {
-    return true;
-  }
-  return isPrivateIp(h);
+  const host = String(hostname || '').trim().toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!host || host === 'localhost' || /\.(localhost|local|internal)$/.test(host)) return true;
+  return isIP(host) !== 0 && isPrivateIp(host);
 }
 
 export function isPrivateIp(ip: string): boolean {
-  const h = String(ip || '')
-    .trim()
-    .toLowerCase()
-    .replace(/^\[|\]$/g, '');
-  if (!h) return true;
-  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
-
-  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(h)) {
-    const p = h.split('.').map(Number);
-    if (p.some((n) => !Number.isFinite(n) || n > 255)) return true;
-    if (p[0] === 10) return true;
-    if (p[0] === 127) return true;
-    if (p[0] === 0) return true;
-    if (p[0] === 169 && p[1] === 254) return true;
-    if (p[0] === 192 && p[1] === 168) return true;
-    if (p[0] === 172 && p[1] >= 16 && p[1] <= 31) return true;
-    if (p[0] === 100 && p[1] >= 64 && p[1] <= 127) return true;
-    if (p[0] === 198 && (p[1] === 18 || p[1] === 19)) return true;
+  const host = String(ip || '').trim().replace(/^\[|\]$/g, '');
+  if (!ipaddr.isValid(host) || host.includes('%')) return true;
+  let address = ipaddr.parse(host);
+  if (address.kind() === 'ipv6' && (address as ipaddr.IPv6).isIPv4MappedAddress()) {
+    address = (address as ipaddr.IPv6).toIPv4Address();
   }
-
-  if (h.includes(':')) {
-    const bare = h.split('%')[0];
-    if (bare === '::1') return true;
-    if (bare.startsWith('fc') || bare.startsWith('fd')) return true;
-    if (bare.startsWith('fe80')) return true;
-    if (bare.startsWith('ff')) return true;
-    if (bare.startsWith('::ffff:')) {
-      return isPrivateIp(bare.slice('::ffff:'.length));
-    }
-  }
-  return false;
+  // Reject loopback, RFC1918, link-local, reserved/documentation, multicast,
+  // transition and unspecified ranges; only globally routed unicast is allowed.
+  return address.range() !== 'unicast';
 }
 
-/**
- * 出站 URL 安全校验：协议 + 主机名黑名单 + DNS 解析后 IP。
- * allowPrivate：自建 Bark/Gotify 等局域网场景。
- */
-export async function assertSafeOutboundUrl(
-  url: string,
-  opts?: { allowHttp?: boolean; allowPrivate?: boolean },
-) {
+async function resolveSafeTarget(url: string, options: OutboundOptions = {}) {
   let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error('URL 无效');
-  }
-  const allowHttp = !!opts?.allowHttp;
-  const allowPrivate = !!opts?.allowPrivate;
-  if (allowHttp) {
-    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
-      throw new Error('仅支持 HTTP/HTTPS');
-    }
-  } else if (parsed.protocol !== 'https:') {
-    throw new Error('仅支持 HTTPS');
-  }
-
-  const host = parsed.hostname;
-  if (!allowPrivate && isPrivateHostname(host)) {
-    throw new Error('禁止请求内网地址（SSRF 防护）');
-  }
-
-  const bareHost = host.replace(/^\[|\]$/g, '');
-  if (!allowPrivate && !isIP(bareHost)) {
-    try {
-      const results = await lookup(host, { all: true, verbatim: true });
-      if (!results?.length) throw new Error('DNS 解析失败');
-      for (const r of results) {
-        if (isPrivateIp(r.address)) {
-          throw new Error(`禁止请求内网地址（解析到 ${r.address}）`);
-        }
-      }
-    } catch (e: any) {
-      if (String(e?.message || '').includes('禁止请求')) throw e;
-      throw new Error(`DNS 解析失败: ${e?.message || e}`);
-    }
-  }
+  try { parsed = new URL(url); } catch { throw new Error('URL 无效'); }
+  if (parsed.protocol !== 'https:' && !(options.allowHttp && parsed.protocol === 'http:')) throw new Error('仅支持 HTTPS（自建渠道可显式允许 HTTP）');
+  if (parsed.username || parsed.password) throw new Error('URL 不允许嵌入凭据');
+  const host = parsed.hostname.replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (!options.allowPrivate && isPrivateHostname(host)) throw new Error('禁止请求内网地址（SSRF 防护）');
+  const results = isIP(host) ? [{ address: host, family: isIP(host) }] : await lookup(host, { all: true, verbatim: true });
+  if (!results.length) throw new Error('DNS 解析失败');
+  if (!options.allowPrivate && results.some(result => isPrivateIp(result.address))) throw new Error('禁止请求内网地址（DNS 解析结果）');
+  return { parsed, results };
 }
 
-/** 通用 JSON 请求；默认不跟随跳转 */
+export async function assertSafeOutboundUrl(url: string, options?: OutboundOptions) {
+  await resolveSafeTarget(url, options);
+}
+
+/** Resolve once, pin the connection to the checked address, and preserve TLS hostname verification. */
 export async function fetchJson(
   url: string,
   init: RequestInit = {},
   timeoutMs = DEFAULT_TIMEOUT,
+  options: OutboundOptions = {},
 ): Promise<{ ok: boolean; status: number; data: unknown; text: string }> {
+  const { results } = await resolveSafeTarget(url, options);
+  const dispatcher = new Agent({ connect: { lookup: ((_host: string, lookupOptions: any, callback: any) => {
+    const address = results.find(result => !lookupOptions.family || result.family === lookupOptions.family) || results[0];
+    if (lookupOptions.all) callback(null, [address]);
+    else callback(null, address.address, address.family);
+  }) as any } });
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abort = () => controller.abort();
+  if (init.signal?.aborted) controller.abort();
+  init.signal?.addEventListener('abort', abort, { once: true });
   try {
-    const res = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-      redirect: 'error',
-    });
-    const text = await res.text();
-    let data: unknown = text;
-    try {
-      data = text ? JSON.parse(text) : null;
-    } catch {
-      /* keep text */
+    const response = await safeFetch(url, { ...init, signal: controller.signal, redirect: 'error', dispatcher } as any);
+    const maximum = options.maxResponseBytes || 1024 * 1024;
+    if (Number(response.headers.get('content-length')) > maximum) throw new Error('渠道响应过大');
+    const reader = response.body?.getReader();
+    const chunks: Buffer[] = [];
+    let length = 0;
+    if (reader) {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.length;
+        if (length > maximum) { await reader.cancel(); throw new Error('渠道响应过大'); }
+        chunks.push(Buffer.from(value));
+      }
     }
-    return { ok: res.ok, status: res.status, data, text };
+    const text = Buffer.concat(chunks).toString('utf8');
+    let data: unknown = text;
+    try { data = text ? JSON.parse(text) : null; } catch { /* preserve non-JSON response */ }
+    return { ok: response.ok, status: response.status, data, text };
   } finally {
     clearTimeout(timer);
+    init.signal?.removeEventListener('abort', abort);
+    await dispatcher.destroy();
   }
 }

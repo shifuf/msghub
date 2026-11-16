@@ -115,7 +115,7 @@ const dialog = useDialog();
 const router = useRouter();
 
 const filterProjectId = ref<string | null>(null);
-const filterEnabled = ref<boolean | null>(null);
+const filterEnabled = ref<string | null>(null);
 const projectOptions = ref<{ label: string; value: string }[]>([]);
 
 const form = reactive({
@@ -127,8 +127,8 @@ const form = reactive({
 });
 
 const enabledOptions = [
-  { label: '仅启用', value: true },
-  { label: '仅禁用', value: false },
+  { label: '仅启用', value: 'true' },
+  { label: '仅禁用', value: 'false' },
 ];
 
 const filterProjectOptions = computed(() => [
@@ -198,7 +198,7 @@ async function load() {
     const params: { projectId?: string; enabled?: boolean } = {};
     if (filterProjectId.value) params.projectId = filterProjectId.value;
     if (filterEnabled.value !== null && filterEnabled.value !== undefined) {
-      params.enabled = filterEnabled.value;
+      params.enabled = filterEnabled.value === 'true';
     }
     list.value = (await templatesApi.list(params)) || [];
   } catch (e: any) {

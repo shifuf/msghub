@@ -9,15 +9,23 @@
     "dev:api": "pnpm --filter @msg/api dev",
     "dev:web": "pnpm --filter @msg/web dev",
     "build": "pnpm -r --filter @msg/api --filter @msg/web build",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "node scripts/lint.cjs",
+    "test": "node --test tests/*.test.cjs scripts/security-regression.cjs scripts/security-followup.test.cjs scripts/delivery-regression.test.cjs && pnpm --filter @msg/web test",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:up": "node scripts/db-up.js",
     "db:migrate": "pnpm --filter @msg/api prisma:migrate",
     "db:seed": "pnpm --filter @msg/api prisma:seed",
     "db:generate": "pnpm --filter @msg/api prisma:generate"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22.22.0"
   },
   "pnpm": {
+    "overrides": {
+      "glob": "^14.0.2",
+      "minimatch": "^11.0.1"
+    },
     "onlyBuiltDependencies": [
       "@nestjs/core",
       "@prisma/client",
@@ -28,6 +36,6 @@
     ]
   },
   "devDependencies": {
-    "pg": "^8.22.0"
+    "pg": "^8.23.1"
   }
 }

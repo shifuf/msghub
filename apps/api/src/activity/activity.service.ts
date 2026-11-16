@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -52,14 +52,16 @@ export class ActivityService {
     return { items, total, page, pageSize };
   }
 
-  async clear(opts: { action?: string; resource?: string; before?: string } = {}) {
+  async clear(opts: { action?: string; resource?: string; before?: string; dryRun?: boolean } = {}) {
     const where: Prisma.ActivityLogWhereInput = {};
     if (opts.action) where.action = { contains: opts.action };
     if (opts.resource) where.resource = opts.resource;
-    if (opts.before) {
+    if (opts.before !== undefined) {
       const d = new Date(opts.before);
-      if (!Number.isNaN(d.getTime())) where.createdAt = { lt: d };
+      if (!opts.before || Number.isNaN(d.getTime())) throw new BadRequestException('清理日期无效');
+      where.createdAt = { lt: d };
     }
+    if (opts.dryRun) return { matched: await this.prisma.activityLog.count({ where }), deleted: 0 };
     const result = await this.prisma.activityLog.deleteMany({ where });
     return { deleted: result.count };
   }

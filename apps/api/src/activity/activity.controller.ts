@@ -28,7 +28,7 @@ export class ActivityController {
   @Post('clear')
   async clear(
     @Body()
-    body: { action?: string; resource?: string; before?: string } = {},
+    body: { action?: string; resource?: string; before?: string; dryRun?: boolean } = {},
   ) {
     return ok(await this.activity.clear(body || {}));
   }

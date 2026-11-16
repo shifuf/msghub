@@ -130,6 +130,20 @@ export class SimplePushController {
     private templates: TemplatesService,
   ) {}
 
+  @Post('webhook/dry-run')
+  async dryRun(
+    @Headers('x-api-key') apiKeyHeader: string | undefined,
+    @Headers('authorization') authorization: string | undefined,
+    @Body() dto: WebhookDto,
+  ) {
+    const key = this.extractApiKey(apiKeyHeader, authorization);
+    if (!key) throw new UnauthorizedException('缺少 API Key');
+    const project = await this.projects.findByApiKey(key);
+    if (!project || !project.enabled) throw new UnauthorizedException('无效的 API Key');
+    await this.assertRateLimit(project);
+    return ok(await this.messages.dryRun(project.id, dto));
+  }
+
   /**
    * 开放列出邮件模板（项目模板 + 全局启用模板）。
    * 供博客后台等接入方做模板选择，不返回 htmlBody 大字段。
@@ -191,6 +205,7 @@ export class SimplePushController {
 
     const dedupeKey = (idemHeader || dto.dedupeKey || '').trim();
     const ttl = project.idempotencyTtlMin ?? 30;
+    let owner: string | undefined;
     if (dedupeKey) {
       const began = await this.idempotency.begin({
         projectId: project.id,
@@ -198,6 +213,7 @@ export class SimplePushController {
         ttlMin: ttl,
       });
       if (began.hit) return ok(began.response);
+      owner = (began as any).owner;
       if ((began as any).inFlight) {
         throw new HttpException(
           {
@@ -244,7 +260,7 @@ export class SimplePushController {
 
       if (!result.success && result.status !== 'PENDING' && result.status !== 'DELAYED') {
         if (dedupeKey) {
-          await this.idempotency.release({ projectId: project.id, key: `email:${dedupeKey}` });
+          await this.idempotency.release({ projectId: project.id, key: `email:${dedupeKey}`, owner });
         }
         throw new HttpException(
           {
@@ -272,14 +288,15 @@ export class SimplePushController {
           messageId: result.messageId,
           response: data,
           ttlMin: ttl,
+          owner,
         });
       }
       return ok(data);
     } catch (e: any) {
       // 502 已在上方 release；成功 return 不会进 catch
-      if (dedupeKey && !(e instanceof HttpException && e.getStatus() === 502)) {
+      if (dedupeKey && e instanceof BadRequestException) {
         try {
-          await this.idempotency.release({ projectId: project.id, key: `email:${dedupeKey}` });
+          await this.idempotency.release({ projectId: project.id, key: `email:${dedupeKey}`, owner });
         } catch {
           /* ignore */
         }
@@ -482,6 +499,7 @@ export class SimplePushController {
 
     const dedupeKey = (opts.dedupeKey || '').trim();
     const ttl = project.idempotencyTtlMin ?? 30;
+    let owner: string | undefined;
     if (dedupeKey) {
       const began = await this.idempotency.begin({
         projectId: project.id,
@@ -489,6 +507,7 @@ export class SimplePushController {
         ttlMin: ttl,
       });
       if (began.hit) return ok(began.response);
+      owner = (began as any).owner;
       if ((began as any).inFlight) {
         throw new HttpException(
           {
@@ -536,7 +555,7 @@ export class SimplePushController {
 
       if (!result.success && result.status !== 'PENDING' && result.status !== 'DELAYED') {
         if (dedupeKey) {
-          await this.idempotency.release({ projectId: project.id, key: `push:${dedupeKey}` });
+          await this.idempotency.release({ projectId: project.id, key: `push:${dedupeKey}`, owner });
         }
         throw new HttpException(
           {
@@ -566,11 +585,12 @@ export class SimplePushController {
           messageId: result.messageId,
           response: data,
           ttlMin: ttl,
+          owner,
         });
       }
       return ok(data);
     } catch (e: any) {
-      if (dedupeKey && !(e instanceof HttpException && e.getStatus?.() === 409)) {
+      if (dedupeKey && e instanceof BadRequestException) {
         // 成功 commit 后不应释放；仅异常/502 前已处理。HttpException 502 已 release。
         const status = e instanceof HttpException ? e.getStatus() : 0;
         if (status !== 502) {
@@ -578,6 +598,7 @@ export class SimplePushController {
             await this.idempotency.release({
               projectId: project.id,
               key: `push:${dedupeKey}`,
+              owner,
             });
           } catch {
             /* ignore */

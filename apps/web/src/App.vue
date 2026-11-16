@@ -17,6 +17,7 @@
 </template>
 
 <script setup lang="ts">
+import type { CSSProperties } from 'vue';
 import {
   NConfigProvider,
   NLoadingBarProvider,
@@ -27,7 +28,7 @@ import {
   dateZhCN,
 } from 'naive-ui';
 
-const notifyContainerStyle = {
+const notifyContainerStyle: CSSProperties = {
   width: 'min(380px, calc(100vw - 24px))',
   maxWidth: 'min(380px, calc(100vw - 24px))',
   zIndex: '5000',

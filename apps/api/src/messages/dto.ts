@@ -5,6 +5,8 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsDateString,
+  ArrayMaxSize,
   MinLength,
 } from 'class-validator';
 import { ChannelType } from '@prisma/client';
@@ -57,11 +59,13 @@ export class BatchSendDto {
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(100)
   @IsString({ each: true })
   channelIds?: string[];
 
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(100)
   @IsEnum(ChannelType, { each: true })
   channelTypes?: ChannelType[];
 
@@ -93,7 +97,7 @@ export class ClearMessagesDto {
 
   /** ISO 时间，删除此时间之前的记录 */
   @IsOptional()
-  @IsString()
+  @IsDateString()
   before?: string;
 }
 
@@ -140,7 +144,7 @@ export class IdsDto {
 
 export class CleanupDto {
   @IsOptional()
-  @IsString()
+  @IsDateString()
   before?: string;
 
   @IsOptional()
@@ -154,4 +158,8 @@ export class CleanupDto {
   @IsOptional()
   @IsBoolean()
   onlyArchived?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  preview?: boolean;
 }

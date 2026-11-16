@@ -1,4 +1,4 @@
-import { Processor, WorkerHost } from '@nestjs/bullmq';
+import { Processor, WorkerHost, OnWorkerEvent } from '@nestjs/bullmq';
 import { Logger } from '@nestjs/common';
 import { Job } from 'bullmq';
 import { ChannelType, MessageSource, MessageStatus } from '@prisma/client';
@@ -9,6 +9,7 @@ import { RealtimeService } from '../realtime/realtime.service';
 import { SEND_QUEUE, SendJobData } from './queue.constants';
 import { sanitizeErrorMessage } from '../common/utils';
 import { EmailPolicyService } from '../email-policy/email-policy.service';
+import { safeAdapterSend } from '../common/delivery.util';
 
 @Processor(SEND_QUEUE)
 export class SendProcessor extends WorkerHost {
@@ -39,6 +40,20 @@ export class SendProcessor extends WorkerHost {
     }
   }
 
+  @OnWorkerEvent('failed')
+  async onFailed(job: Job<SendJobData> | undefined, error: Error) {
+    if (!job || job.attemptsMade < (job.opts.attempts || 1)) return;
+    try {
+      const log = await this.prisma.messageLog.findUnique({ where: { id: job.data.messageId } });
+      if (!log || log.status !== MessageStatus.PENDING) return;
+      await this.prisma.messageLog.updateMany({ where: { id: log.id, status: MessageStatus.PENDING }, data: {
+        status: MessageStatus.FAILED, nextRetryAt: null,
+        errorMessage: (log as any).deliveryStartedAt ? 'DELIVERY_UNKNOWN: worker 执行中断，结果待核实' : sanitizeErrorMessage(error.message),
+      } });
+      await this.publish(log.id);
+    } catch (e: any) { this.logger.warn(`failed-state recovery: ${e?.message}`); }
+  }
+
   private async sendBackupPush(
     projectId: string,
     backup: { id: string; type: ChannelType; config: unknown },
@@ -60,10 +75,9 @@ export class SendProcessor extends WorkerHost {
         attempts: 0,
       },
     });
-    const alertAdapter = this.adapters.get(backup.type);
     const alertCfg = (backup.config || {}) as Record<string, unknown>;
     const alertStarted = Date.now();
-    const alertResult = await alertAdapter.send(alertCfg, { title, content });
+    const alertResult = await safeAdapterSend(this.adapters, backup.type, alertCfg, { title, content });
     await this.prisma.messageLog.update({
       where: { id: alertLog.id },
       data: {
@@ -136,6 +150,21 @@ export class SendProcessor extends WorkerHost {
 
   async process(job: Job<SendJobData>) {
     const data = job.data;
+    const existing = await this.prisma.messageLog.findUnique({ where: { id: data.messageId } });
+    if (!existing || existing.status === MessageStatus.SUCCESS || existing.status === MessageStatus.FAILED) return { success: existing?.status === MessageStatus.SUCCESS, skipped: true };
+    if ((existing as any).deliveryStartedAt) {
+      await this.prisma.messageLog.updateMany({ where: { id: data.messageId, status: MessageStatus.PENDING }, data: { status: MessageStatus.FAILED, errorMessage: 'DELIVERY_UNKNOWN: 上次外部发送结果未知，请核实后手动重发', nextRetryAt: null } });
+      await this.publish(data.messageId);
+      return { success: false, uncertain: true };
+    }
+    if (data.projectId) {
+      const project = await this.prisma.project.findUnique({ where: { id: data.projectId }, select: { enabled: true } });
+      if (!project?.enabled) {
+        await this.prisma.messageLog.updateMany({ where: { id: data.messageId, status: MessageStatus.PENDING }, data: { status: MessageStatus.FAILED, errorMessage: '项目不存在或已禁用', nextRetryAt: null } });
+        await this.publish(data.messageId);
+        return { success: false, skipped: true };
+      }
+    }
     const channel = await this.prisma.channel.findUnique({ where: { id: data.channelId } });
     if (!channel || !channel.enabled) {
       await this.prisma.messageLog.update({
@@ -153,7 +182,6 @@ export class SendProcessor extends WorkerHost {
       return { success: false };
     }
 
-    const adapter = this.adapters.get(channel.type as ChannelType);
     const config = (channel.config || {}) as Record<string, unknown>;
     // 推送补齐 messageId/readToken（队列 payload 可能在入库后注入过）
     let sendPayload: any = data.payload || {};
@@ -177,7 +205,12 @@ export class SendProcessor extends WorkerHost {
       sendPayload = { ...sendPayload, extra };
     }
     const started = Date.now();
-    const result = await adapter.send(config, sendPayload);
+    const claimed = await this.prisma.messageLog.updateMany({
+      where: { id: data.messageId, status: MessageStatus.PENDING, deliveryStartedAt: null } as any,
+      data: { deliveryStartedAt: new Date() } as any,
+    });
+    if (!claimed.count) return { success: false, skipped: true };
+    const result = await safeAdapterSend(this.adapters, channel.type, config, sendPayload);
     const durationMs = Date.now() - started;
 
     if (result.success && data.kind === 'push' && data.projectId) {
@@ -212,6 +245,7 @@ export class SendProcessor extends WorkerHost {
               if (!existing) {
                 await this.prisma.scheduledMessage.create({
                   data: {
+                    id: `unread-${data.messageId}`,
                     projectId: data.projectId,
                     kind: 'unread_email_fallback',
                     title: log.title,
@@ -269,7 +303,8 @@ export class SendProcessor extends WorkerHost {
           attempts,
           attemptDetail: detail.slice(-20) as any,
           nextRetryAt,
-        },
+          deliveryStartedAt: null,
+        } as any,
       });
       await this.publish(data.messageId);
       this.logger.warn(`send failed message=${data.messageId} attempt=${attempts}: ${result.errorMessage}`);
@@ -320,18 +355,26 @@ export class SendProcessor extends WorkerHost {
                     toAddress: payload.to || log.toAddress,
                     templateCode: log.templateCode,
                     parentId: log.id,
+                    priority: log.priority,
+                    eventCode: log.eventCode,
+                    dedupeKey: log.dedupeKey,
                     attempts: 0,
                   },
                 });
-                const foAdapter = this.adapters.get(ch.type);
                 const foCfg = (ch.config || {}) as Record<string, unknown>;
                 const foStarted = Date.now();
-                const foResult = await foAdapter.send(foCfg, {
+                const { resolveUnsubscribeSecret, signReadToken } = await import('../common/token.util');
+                const foExtra = { ...(payload.extra || {}), messageId: foLog.id, readToken: signReadToken(foLog.id, resolveUnsubscribeSecret(process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, { allowDevFallback: true })) };
+                await this.prisma.messageLog.update({ where: { id: foLog.id }, data: {
+                  deliveryStartedAt: new Date(),
+                  payload: { title: payload.title || log.title, content: payload.content || log.content, html: payload.html, to: payload.to || log.toAddress, extra: { ...foExtra, failoverFrom: log.id } } as any,
+                } });
+                const foResult = await safeAdapterSend(this.adapters, ch.type, foCfg, {
                   title: payload.title || log.title || undefined,
                   content: payload.content || log.content || undefined,
                   html: payload.html,
                   to: payload.to || log.toAddress || undefined,
-                  extra: payload.extra,
+                  extra: foExtra,
                 });
                 await this.prisma.messageLog.update({
                   where: { id: foLog.id },
@@ -343,10 +386,12 @@ export class SendProcessor extends WorkerHost {
                     errorMessage: sanitizeErrorMessage(foResult.errorMessage),
                     durationMs: Date.now() - foStarted,
                     attempts: 1,
-                  },
+                    deliveryStartedAt: null,
+                  } as any,
                 });
                 await this.publish(foLog.id);
                 if (foResult.success) {
+                  await this.scheduleFailoverFallback(log.projectId, foLog.id, payload.title || log.title, payload.content || log.content);
                   this.logger.log(
                     `failover success parent=${log.id} via=${ch.id} message=${foLog.id}`,
                   );
@@ -426,6 +471,7 @@ export class SendProcessor extends WorkerHost {
         durationMs,
         attempts: job.attemptsMade + 1,
         nextRetryAt: null,
+        deliveryStartedAt: null,
         attemptDetail: [
           ...((await this.prisma.messageLog
             .findUnique({
@@ -440,9 +486,25 @@ export class SendProcessor extends WorkerHost {
             durationMs,
           },
         ].slice(-20) as any,
-      },
+      } as any,
     });
     await this.publish(data.messageId);
     return { success: true };
+  }
+
+  private async scheduleFailoverFallback(projectId: string, messageId: string, title?: string | null, content?: string | null) {
+    try {
+      const project = await this.prisma.project.findUnique({ where: { id: projectId } });
+      if (!project?.unreadEmailFallbackEnabled) return;
+      const source = await this.prisma.messageLog.findUnique({ where: { id: messageId }, select: { readAt: true } });
+      if (!source || source.readAt) return;
+      const minutes = Math.max(1, Math.min(43200, Number(project.unreadEmailFallbackHours) || 24));
+      await this.prisma.scheduledMessage.upsert({
+        where: { id: `unread-${messageId}` }, update: {},
+        create: { id: `unread-${messageId}`, projectId, messageId, kind: 'unread_email_fallback', title, content,
+          templateCode: project.unreadEmailTemplateCode, runAt: new Date(Date.now() + minutes * 60_000),
+          variables: { sourceMessageId: messageId, unreadEmailFallback: true, minutes }, status: 'PENDING' },
+      });
+    } catch (e: any) { this.logger.warn(`failover unread fallback schedule: ${e?.message}`); }
   }
 }

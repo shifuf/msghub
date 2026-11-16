@@ -91,6 +91,8 @@ export class QuietHoursService {
   }
 
   private localParts(at: Date, timeZone: string) {
+    try { new Intl.DateTimeFormat('en-US', { timeZone }).format(at); }
+    catch { timeZone = 'Asia/Shanghai'; }
     const fmt = new Intl.DateTimeFormat('en-US', {
       timeZone,
       year: 'numeric',

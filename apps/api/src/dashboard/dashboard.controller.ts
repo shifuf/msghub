@@ -17,9 +17,10 @@ export class DashboardController {
   async notifications(
     @Query('since') since?: string,
     @Query('limit') limit?: string,
+    @Query('cursor') cursor?: string,
   ) {
     return ok(
-      await this.dashboard.notifications(since, limit ? Number(limit) : 20),
+      await this.dashboard.notifications(since, limit ? Number(limit) : 20, cursor),
     );
   }
 

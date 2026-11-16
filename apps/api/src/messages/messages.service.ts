@@ -3,6 +3,8 @@ import {
   NotFoundException,
   BadRequestException,
   Logger,
+  OnModuleInit,
+  OnModuleDestroy,
 } from '@nestjs/common';
 import {
   ChannelType,
@@ -25,8 +27,11 @@ import { SEND_QUEUE, SendJobData } from '../queue/queue.constants';
 import { isValidEmail, sanitizeErrorMessage } from '../common/utils';
 import { EmailPolicyService } from '../email-policy/email-policy.service';
 import { QuietHoursService } from '../common/quiet-hours.service';
+import { BatchSendDto } from './dto';
+import { safeAdapterSend, DeliveryUncertainError } from '../common/delivery.util';
 import {
   extractTemplateVars,
+  extractRequiredTemplateVars,
   missingTemplateVars,
   resolveUnsubscribeSecret,
   signUnsubscribeToken,
@@ -36,6 +41,7 @@ import {
   resolveAsyncSend,
   resolveSendMaxAttempts,
   resolveSiteUrl,
+  isProduction,
 } from '../common/env';
 
 export type MessageListQuery = {
@@ -59,10 +65,47 @@ export type MessageListQuery = {
 };
 
 @Injectable()
-export class MessagesService {
+export class MessagesService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(MessagesService.name);
   private readonly asyncEnabled: boolean;
   private readonly maxAttempts: number;
+  private recoveryTimer?: ReturnType<typeof setInterval>;
+  private recovering = false;
+  private lastRetentionAt = 0;
+
+  onModuleInit() {
+    this.recoveryTimer = setInterval(() => { void this.recoverPending(); }, 60_000);
+  }
+
+  onModuleDestroy() { if (this.recoveryTimer) clearInterval(this.recoveryTimer); }
+
+  async recoverPending() {
+    if (this.recovering) return;
+    this.recovering = true;
+    try {
+      if (Date.now() - this.lastRetentionAt > 3600_000) {
+        await this.applyRetention();
+        this.lastRetentionAt = Date.now();
+      }
+      const rows = await this.prisma.messageLog.findMany({ where: { status: MessageStatus.PENDING, createdAt: { lt: new Date(Date.now() - 120_000) }, channelId: { not: null } }, take: 100, orderBy: { createdAt: 'asc' } });
+      for (const row of rows) {
+        const jobId = `send-${row.id}`;
+        const job = await this.sendQueue.getJob(jobId);
+        if (job && ['active', 'waiting', 'delayed'].includes(await job.getState())) continue;
+        if ((row as any).deliveryStartedAt || (row.payload as any)?._deliveryMode !== 'queue') {
+          await this.prisma.messageLog.updateMany({ where: { id: row.id, status: MessageStatus.PENDING }, data: { status: MessageStatus.FAILED, errorMessage: 'DELIVERY_UNKNOWN: 投递中断，结果待核实', nextRetryAt: null } });
+          await this.publishLog(row.id);
+          continue;
+        }
+        if (job) { await job.retry().catch(() => {}); continue; }
+        await this.sendQueue.add(row.channelType === ChannelType.SMTP ? 'email' : 'push', {
+          messageId: row.id, projectId: row.projectId!, channelId: row.channelId!, channelType: row.channelType!,
+          kind: row.channelType === ChannelType.SMTP ? 'email' : 'push', payload: row.payload as any,
+        }, { jobId, attempts: this.maxAttempts, backoff: { type: 'exponential', delay: 2000 }, removeOnComplete: 1000, removeOnFail: 5000 });
+      }
+    } catch (e: any) { this.logger.warn(`pending recovery: ${e?.message}`); }
+    finally { this.recovering = false; }
+  }
 
   constructor(
     private prisma: PrismaService,
@@ -200,7 +243,8 @@ export class MessagesService {
 
     const escape = (v: unknown) => {
       if (v === null || v === undefined) return '';
-      const s = String(v);
+      const raw = String(v);
+      const s = /^[\s\u0000-\u001f]*[=+@-]/.test(raw) || /^[\t\r\n]/.test(raw) ? `'${raw}` : raw;
       if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
       return s;
     };
@@ -245,7 +289,7 @@ export class MessagesService {
     onlyFailed?: boolean;
     before?: string;
   } = {}) {
-    const where: Prisma.MessageLogWhereInput = {};
+    const where: Prisma.MessageLogWhereInput = { status: { in: [MessageStatus.SUCCESS, MessageStatus.FAILED] } };
     if (opts.projectId) where.projectId = opts.projectId;
     if (opts.onlyFailed) {
       where.OR = [
@@ -255,8 +299,10 @@ export class MessagesService {
     }
     if (opts.before) {
       const d = new Date(opts.before);
-      if (!Number.isNaN(d.getTime())) where.createdAt = { lt: d };
+      if (Number.isNaN(d.getTime())) throw new BadRequestException('before 无效');
+      where.createdAt = { lt: d };
     }
+    await this.excludeActiveReferences(where);
     const result = await this.prisma.messageLog.deleteMany({ where });
     this.logger.log(
       `cleared message logs: deleted=${result.count} projectId=${opts.projectId || '*'} onlyFailed=${!!opts.onlyFailed}`,
@@ -384,8 +430,7 @@ export class MessagesService {
       }
     }
 
-    const log = await this.prisma.messageLog.create({
-      data: {
+    const logData: Prisma.MessageLogUncheckedCreateInput = {
         projectId: opts.projectId,
         channelId: opts.channelId,
         channelType: opts.channelType,
@@ -395,6 +440,7 @@ export class MessagesService {
         title: opts.title,
         content: opts.content || opts.html,
         payload: {
+          _deliveryMode: this.asyncEnabled && !opts.forceSync ? 'queue' : 'sync',
           title: opts.title,
           content: opts.content,
           html: opts.html,
@@ -412,8 +458,10 @@ export class MessagesService {
         dedupeKey: opts.dedupeKey,
         attempts: 0,
         parentId: opts.parentId,
-      },
-    });
+      };
+    const log = opts.channelType === ChannelType.SMTP
+      ? await this.emailPolicy.reserveEmailLog(logData)
+      : await this.prisma.messageLog.create({ data: logData });
 
     // 推送携带 messageId + readToken，供客户端点击回执
     const enrichedExtra =
@@ -434,6 +482,7 @@ export class MessagesService {
         data: {
           payload: {
             ...payload,
+            _deliveryMode: this.asyncEnabled && !opts.forceSync ? 'queue' : 'sync',
             _failover: {
               triedChannelIds: tried,
               kind: opts.kind,
@@ -466,6 +515,7 @@ export class MessagesService {
             },
           },
           {
+            jobId: `send-${log.id}`,
             attempts: this.maxAttempts,
             backoff: { type: 'exponential', delay: 2000 },
             removeOnComplete: 1000,
@@ -489,16 +539,22 @@ export class MessagesService {
           channelType: opts.channelType,
         };
       } catch (e: any) {
-        this.logger.warn(`队列不可用，降级同步发送: ${e?.message || e}`);
+        this.logger.warn(`队列暂不可用，保留待发送记录供恢复: ${e?.message || e}`);
+        return { messageId: log.id, status: MessageStatus.PENDING, success: true, queued: true, channelId: opts.channelId, channelType: opts.channelType };
       }
     }
 
     const channel = await this.prisma.channel.findUnique({ where: { id: opts.channelId } });
-    if (!channel) throw new NotFoundException('渠道不存在');
-    const adapter = this.adapters.get(channel.type);
+    if (!channel) {
+      await this.prisma.messageLog.update({ where: { id: log.id }, data: { status: MessageStatus.FAILED, errorMessage: '渠道不存在' } });
+      return { messageId: log.id, success: false, status: MessageStatus.FAILED, errorMessage: '渠道不存在', channelId: opts.channelId, channelType: opts.channelType };
+    }
     const config = (channel.config || {}) as Record<string, unknown>;
     const started = Date.now();
-    const result = await adapter.send(config, payload);
+    await this.prisma.messageLog.update({ where: { id: log.id }, data: { deliveryStartedAt: new Date() } as any });
+    const result = channel.enabled
+      ? await safeAdapterSend(this.adapters, channel.type, config, payload)
+      : { success: false, errorMessage: '渠道已禁用' };
     const durationMs = Date.now() - started;
     const attemptDetail = this.appendAttempt(null, {
       n: 1,
@@ -517,8 +573,9 @@ export class MessagesService {
         attempts: 1,
         attemptDetail: attemptDetail as any,
         nextRetryAt: null,
-      },
-    });
+        deliveryStartedAt: null,
+      } as any,
+    }).catch(() => { throw new DeliveryUncertainError(log.id); });
     await this.publishLog(updated.id);
 
     if (result.success && opts.kind === 'push' && opts.source !== MessageSource.BACKUP_ALERT) {
@@ -648,6 +705,7 @@ export class MessagesService {
       }
       return null;
     } catch (e: any) {
+      if (e instanceof DeliveryUncertainError) throw e;
       this.logger.warn(`failover failed: ${e?.message || e}`);
       return null;
     }
@@ -836,6 +894,8 @@ export class MessagesService {
     /** 静默补发时跳过再次静默 */
     forceImmediate?: boolean;
   }) {
+    const project = await this.prisma.project.findUnique({ where: { id: opts.projectId }, select: { enabled: true } });
+    if (!project?.enabled) throw new BadRequestException('项目不存在或已禁用');
     let title = opts.title;
     let content = opts.content;
     let templateCode: string | undefined;
@@ -853,11 +913,8 @@ export class MessagesService {
       content = rendered.content || content;
       templateCode = rendered.code;
       // 调用方显式传 variables 时校验声明必填变量
-      if (opts.variables && Object.keys(opts.variables).length > 0) {
-        const declared =
-          Array.isArray(rendered.variables) && rendered.variables.length
-            ? (rendered.variables as string[])
-            : extractTemplateVars(rendered.titleTpl, rendered.contentTpl);
+      {
+        const declared = extractRequiredTemplateVars(rendered.titleTpl, rendered.contentTpl);
         const missing = missingTemplateVars(declared, opts.variables);
         if (missing.length) {
           throw new BadRequestException(`推送模板缺少变量: ${missing.join(', ')}`);
@@ -1035,7 +1092,9 @@ export class MessagesService {
       this.logger.log(
         `project-dispatch try project=${opts.projectId} channel=${ch.id}/${ch.type}`,
       );
-      const r = await this.enqueueOrSend({
+      let r: any;
+      try {
+        r = await this.enqueueOrSend({
         kind: 'push',
         projectId: opts.projectId,
         channelId: ch.id,
@@ -1058,6 +1117,11 @@ export class MessagesService {
         eventCode: opts.eventCode,
         dedupeKey: opts.dedupeKey,
       });
+      } catch (error: any) {
+        if (error instanceof DeliveryUncertainError) throw error;
+        this.logger.warn(`project-dispatch channel=${ch.id}: ${sanitizeErrorMessage(error?.message)}`);
+        r = { success: false, status: MessageStatus.FAILED };
+      }
       tried.push(ch.id);
       if (r.success || r.status === MessageStatus.PENDING || r.status === MessageStatus.SUCCESS) {
         externalResult = { ...r, failover: tried.length > 1, triedChannelIds: [...tried] };
@@ -1133,6 +1197,7 @@ export class MessagesService {
           };
         }
       } catch (e: any) {
+        if (e instanceof DeliveryUncertainError) throw e;
         this.logger.warn(`admin email fallback failed: ${e?.message || e}`);
         emailResult = { success: false, errorMessage: e?.message || String(e) };
       }
@@ -1265,11 +1330,12 @@ export class MessagesService {
     dedupeKey?: string;
   }) {
     if (!opts.to) throw new BadRequestException('缺少收件人 to');
+    const project = await this.prisma.project.findUnique({ where: { id: opts.projectId }, select: { enabled: true } });
+    if (!project?.enabled) throw new BadRequestException('项目不存在或已禁用');
     if (!isValidEmail(opts.to)) {
       throw new BadRequestException('收件人邮箱格式无效');
     }
     await this.emailPolicy.assertNotSuppressed(opts.projectId, opts.to);
-    await this.emailPolicy.assertWithinDailyQuota(opts.projectId);
 
     let channel;
     try {
@@ -1302,15 +1368,15 @@ export class MessagesService {
     let templateCode: string | undefined;
     let vars = { ...(opts.variables || {}) } as Record<string, unknown>;
 
-    // 自动注入 unsubscribeUrl（密钥未配置时跳过，不阻断发信）
+    // 外发退订链接必须是绝对地址；生产环境强制 HTTPS。
     if (!vars.unsubscribeUrl && opts.to) {
+      const publicBase = this.emailPublicBase();
       try {
         const secret = resolveUnsubscribeSecret(
           this.config.get<string>('UNSUBSCRIBE_SECRET') ||
             this.config.get<string>('JWT_SECRET'),
           { allowDevFallback: true },
         );
-        const publicBase = resolveSiteUrl();
         const token = signUnsubscribeToken(
           {
             email: opts.to.trim().toLowerCase(),
@@ -1319,23 +1385,26 @@ export class MessagesService {
           },
           secret,
         );
-        if (publicBase) {
-          vars.unsubscribeUrl = `${publicBase}/unsubscribe?token=${encodeURIComponent(token)}`;
-        } else {
-          vars.unsubscribeUrl = `/unsubscribe?token=${encodeURIComponent(token)}`;
-        }
-      } catch {
-        /* 密钥未配置：不注入链接 */
+        vars.unsubscribeUrl = `${publicBase}/unsubscribe?token=${encodeURIComponent(token)}`;
+      } catch (error: any) {
+        if (isProduction()) throw new BadRequestException(error?.message || '退订凭证配置无效');
       }
+    } else if (vars.unsubscribeUrl) {
+      this.validateExternalMailUrl(String(vars.unsubscribeUrl));
     }
 
     if (opts.template) {
       const tpl = await this.templates.resolve(opts.projectId, opts.template);
-      const declared = Array.isArray(tpl.variables)
-        ? (tpl.variables as string[])
-        : extractTemplateVars(tpl.subject, tpl.htmlBody, tpl.textBody || undefined);
+      const declared = extractRequiredTemplateVars(tpl.subject, tpl.htmlBody, tpl.textBody || undefined);
+      // Built-in account-verification templates promise at least one usable
+      // credential. User templates sharing a code retain their own semantics.
+      if (tpl.isSystem && ['register', 'reset_password'].includes(tpl.code)) {
+        const alternative = tpl.code === 'register' ? 'verifyUrl' : 'resetUrl';
+        const used = extractTemplateVars(tpl.subject, tpl.htmlBody, tpl.textBody);
+        if (used.includes('code') && used.includes(alternative) && missingTemplateVars(['code', alternative], vars).length === 2) throw new BadRequestException(`邮件模板至少需要 code 或 ${alternative}`);
+      }
       // 仅当调用方显式传 variables 时校验：声明变量中的必填项（可选变量白名单放行）
-      if (opts.variables && Object.keys(opts.variables).length > 0) {
+      {
         const missing = missingTemplateVars(declared, vars);
         if (missing.length) {
           throw new BadRequestException(`邮件模板缺少变量: ${missing.join(', ')}`);
@@ -1533,6 +1602,65 @@ export class MessagesService {
   }
 
   /** 批量发送到同一项目的多个渠道 / 同一内容多次 */
+  private validateExternalMailUrl(raw: string) {
+    let parsed: URL;
+    try { parsed = new URL(raw); } catch { throw new BadRequestException('SITE_URL/退订链接必须为绝对 HTTP(S) 地址'); }
+    if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) throw new BadRequestException('SITE_URL/退订链接必须为绝对 HTTP(S) 地址且不能含凭据');
+    if (isProduction() && parsed.protocol !== 'https:') throw new BadRequestException('生产外发邮件 SITE_URL/退订链接必须使用 HTTPS');
+    return raw;
+  }
+
+  private emailPublicBase() {
+    const base = resolveSiteUrl();
+    if (!base) throw new BadRequestException('生产外发邮件需要配置绝对 HTTPS SITE_URL 以生成退订链接');
+    this.validateExternalMailUrl(base);
+    const parsed = new URL(base);
+    if (parsed.search || parsed.hash) throw new BadRequestException('SITE_URL 不能包含查询参数或片段');
+    return base;
+  }
+
+  async batchPreview(body: BatchSendDto) {
+    if (!body.projectId) throw new BadRequestException('缺少 projectId');
+    if ((body.channelIds?.length || 0) + (body.channelTypes?.length || 0) > 100) throw new BadRequestException('单次批量最多选择 100 个渠道');
+    const project = await this.prisma.project.findUnique({ where: { id: body.projectId } });
+    if (!project?.enabled) throw new BadRequestException('项目不存在或已禁用');
+    const items: { channelId?: string; channelType?: ChannelType; recipient?: string; valid: boolean; errorMessage?: string }[] = [];
+    const duplicates: { channelId: string; selectedBy: string }[] = [];
+    const seen = new Set<string>();
+    const add = async (selector: { channelId?: string; channelType?: ChannelType }) => {
+      try {
+        const channel = await this.channels.resolveChannel(body.projectId, selector);
+        if (seen.has(channel.id)) { duplicates.push({ channelId: channel.id, selectedBy: selector.channelId ? 'id' : 'type' }); return; }
+        seen.add(channel.id);
+        let errorMessage: string | undefined;
+        if (channel.type === ChannelType.SMTP) {
+          if (!body.to || !isValidEmail(body.to)) errorMessage = 'SMTP 需要有效收件人 to';
+          else if ((await this.emailPolicy.isSuppressed(body.projectId, body.to)).blocked) errorMessage = '收件人已被抑制';
+          else if (!body.html && !body.content) errorMessage = 'SMTP 需要 html/content';
+          if (!errorMessage) { try { this.emailPublicBase(); } catch (e: any) { errorMessage = e.message; } }
+        } else if (!body.title && !body.content && !body.html) errorMessage = '请提供 title 或 content';
+        items.push({ channelId: channel.id, channelType: channel.type, recipient: channel.type === ChannelType.SMTP ? body.to : undefined, valid: !errorMessage, ...(errorMessage ? { errorMessage } : {}) });
+      } catch (error: any) {
+        items.push({ ...selector, valid: false, errorMessage: sanitizeErrorMessage(error?.message) || '渠道不可用' });
+      }
+    };
+    const explicit = !!body.channelIds?.length || !!body.channelTypes?.length;
+    for (const channelId of body.channelIds || []) await add({ channelId });
+    for (const channelType of body.channelTypes || []) await add({ channelType });
+    if (!explicit) {
+      for (const binding of await this.channels.listBindings(body.projectId)) if (binding.enabled && binding.channel?.enabled) await add({ channelId: binding.channelId });
+    }
+    const smtpSelected = items.some((i) => i.channelType === ChannelType.SMTP);
+    let smtpQuota: { limit: number | null; used: number; remaining: number | null; advisory: boolean; timezone: string } | null = null;
+    if (smtpSelected) {
+      const start = new Date(); start.setUTCHours(0, 0, 0, 0);
+      const used = await this.prisma.messageLog.count({ where: { projectId: body.projectId, channelType: ChannelType.SMTP, source: { not: MessageSource.BACKUP_ALERT }, createdAt: { gte: start } } });
+      const limit = project.dailyEmailQuota && project.dailyEmailQuota > 0 ? project.dailyEmailQuota : null;
+      smtpQuota = { limit, used, remaining: limit == null ? null : Math.max(0, limit - used), advisory: true, timezone: 'UTC' };
+    }
+    return { projectId: body.projectId, items, duplicates, estimatedSendAttempts: items.filter((i) => i.valid).length, smtpQuota, valid: items.length > 0 && items.every((i) => i.valid) };
+  }
+
   async batchSend(body: {
     projectId: string;
     channelIds?: string[];
@@ -1542,31 +1670,10 @@ export class MessagesService {
     html?: string;
     to?: string;
   }) {
-    if (!body.projectId) throw new BadRequestException('缺少 projectId');
-    const channelIds = new Set<string>(body.channelIds || []);
-
-    if (body.channelTypes?.length) {
-      for (const t of body.channelTypes) {
-        try {
-          const c = await this.channels.resolveChannel(body.projectId, { channelType: t });
-          channelIds.add(c.id);
-        } catch {
-          // skip missing type
-        }
-      }
-    }
-
-    if (!channelIds.size) {
-      // 全部已绑定启用渠道
-      const bindings = await this.channels.listBindings(body.projectId);
-      for (const b of bindings) {
-        if (b.enabled && b.channel?.enabled) channelIds.add(b.channelId);
-      }
-    }
-
-    if (!channelIds.size) throw new BadRequestException('没有可发送的渠道');
-
-    const results: any[] = [];
+    const preview = await this.batchPreview(body);
+    const channelIds = preview.items.filter((item) => item.valid && item.channelId).map((item) => item.channelId!);
+    if (!preview.items.length) throw new BadRequestException('没有可发送的渠道');
+    const results: any[] = preview.items.filter((item) => !item.valid).map((item) => ({ ...item, success: false }));
     for (const channelId of channelIds) {
       try {
         const channel = await this.prisma.channel.findUnique({ where: { id: channelId } });
@@ -1617,16 +1724,17 @@ export class MessagesService {
 
   async markRead(ids: string[]) {
     if (!ids?.length) return { updated: 0 };
+    const readAt = new Date();
     const result = await this.prisma.messageLog.updateMany({
       where: { id: { in: ids }, readAt: null },
-      data: { readAt: new Date() },
+      data: { readAt },
     });
     // 已读后取消未读邮件兜底
     await this.cancelUnreadEmailFallback(ids);
     for (const id of ids.slice(0, 50)) {
       await this.publishLog(id);
     }
-    return { updated: result.count };
+    return { updated: result.count, readAt };
   }
 
   /** 公开接口：单条已读（token 已在 controller 校验） */
@@ -1634,19 +1742,21 @@ export class MessagesService {
     const m = await this.prisma.messageLog.findUnique({ where: { id: messageId } });
     if (!m) throw new NotFoundException('消息不存在');
     if (m.readAt) {
+      await this.cancelUnreadEmailFallback([messageId]);
       return { updated: 0, alreadyRead: true, messageId, readAt: m.readAt };
     }
-    const updated = await this.prisma.messageLog.update({
-      where: { id: messageId },
-      data: { readAt: new Date() },
+    const readAt = new Date();
+    const changed = await this.prisma.messageLog.updateMany({
+      where: { id: messageId, readAt: null },
+      data: { readAt },
     });
     await this.cancelUnreadEmailFallback([messageId]);
     await this.publishLog(messageId);
     return {
-      updated: 1,
-      alreadyRead: false,
+      updated: changed.count,
+      alreadyRead: changed.count === 0,
       messageId,
-      readAt: updated.readAt,
+      readAt: changed.count ? readAt : (await this.prisma.messageLog.findUnique({ where: { id: messageId } }))?.readAt,
     };
   }
 
@@ -1684,6 +1794,7 @@ export class MessagesService {
       if (existing) return;
       await this.prisma.scheduledMessage.create({
         data: {
+          id: `unread-${opts.messageId}`,
           projectId: opts.projectId,
           kind: 'unread_email_fallback',
           title: opts.title || null,
@@ -1744,7 +1855,7 @@ export class MessagesService {
     return { used: false };
   }
 
-  /** 定时触发：未读则按项目模板发管理员邮件；成功后原消息标已读（邮箱兜底已读） */
+  /** SMTP 接受仅记为邮件兜底，不能证明用户已读。 */
   async executeUnreadEmailFallback(item: {
     id: string;
     projectId: string;
@@ -1771,20 +1882,14 @@ export class MessagesService {
     }
     const alreadyFb = this.parseEmailFallback(src.payload);
     if (alreadyFb.used) {
-      // 已兜底过：补标已读，禁止再发
-      if (!src.readAt) {
-        await this.prisma.messageLog.update({
-          where: { id: sourceId },
-          data: { readAt: new Date() },
-        });
-        await this.cancelUnreadEmailFallback([sourceId]);
-      }
+      await this.cancelUnreadEmailFallback([sourceId]);
       return { success: true, skipped: true, reason: 'already_email_fallback' };
     }
     // 仅对非 SMTP 的成功/延迟消息兜底
     if (src.channelType === ChannelType.SMTP) {
       return { success: true, skipped: true, reason: 'smtp_source' };
     }
+    if (src.status !== MessageStatus.SUCCESS) return { success: true, skipped: true, reason: 'source_not_delivered' };
 
     const project = await this.prisma.project.findUnique({
       where: { id: item.projectId },
@@ -1839,13 +1944,12 @@ export class MessagesService {
     const ok =
       result?.success !== false && result?.status !== MessageStatus.FAILED;
     if (ok) {
-      // 邮件兜底成功视为已通过邮箱阅读，标记已读并终止后续重发/兜底
+      // 终止同一消息的重复邮件提醒，但保持真实阅读状态。
       const now = new Date();
       const prevPayload = (src.payload || {}) as Record<string, unknown>;
       await this.prisma.messageLog.update({
         where: { id: sourceId },
         data: {
-          readAt: now,
           payload: {
             ...prevPayload,
             emailFallback: {
@@ -1870,7 +1974,7 @@ export class MessagesService {
       status: result?.status,
       errorMessage: result?.errorMessage,
       emailTo: adminEmail,
-      sourceMarkedRead: ok,
+      sourceMarkedRead: false,
     };
   }
 
@@ -1888,12 +1992,14 @@ export class MessagesService {
     projectId?: string;
     onlyInbox?: boolean;
     onlyArchived?: boolean;
+    preview?: boolean;
   }) {
-    const where: Prisma.MessageLogWhereInput = {};
+    const where: Prisma.MessageLogWhereInput = { status: { in: [MessageStatus.SUCCESS, MessageStatus.FAILED] } };
     if (opts.projectId) where.projectId = opts.projectId;
     if (opts.before) {
       const d = new Date(opts.before);
-      if (!Number.isNaN(d.getTime())) where.createdAt = { lt: d };
+      if (Number.isNaN(d.getTime())) throw new BadRequestException('before 无效');
+      where.createdAt = { lt: d };
     }
     if (opts.onlyInbox) {
       where.channelId = null;
@@ -1904,13 +2010,71 @@ export class MessagesService {
     if (!opts.before && !opts.onlyArchived) {
       throw new BadRequestException('请提供 before 或 onlyArchived');
     }
+    await this.excludeActiveReferences(where);
+    if (opts.preview) return { matched: await this.prisma.messageLog.count({ where }), deleted: 0 };
     const result = await this.prisma.messageLog.deleteMany({ where });
     return { deleted: result.count };
   }
 
-  /**
-   * 设备推送历史（按 Registration ID 筛选，主要用于 JPUSH / 棱镜浏览器）
-   */
+  private async excludeActiveReferences(where: Prisma.MessageLogWhereInput) {
+    const referenced = await this.prisma.scheduledMessage.findMany({
+      where: { status: { in: ['PENDING', 'RUNNING', 'PAUSED', 'UNCERTAIN'] }, messageId: { not: null } }, select: { messageId: true },
+    });
+    if (referenced.length) where.id = { notIn: referenced.map((r) => r.messageId!).filter(Boolean) };
+    where.AND = [
+      ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
+      { OR: [{ errorMessage: null }, { NOT: { errorMessage: { startsWith: 'DELIVERY_UNKNOWN:' } } }] },
+    ];
+  }
+
+  async timeline(id: string) {
+    const message = await this.get(id);
+    const parentId = message.parentId || message.id;
+    const attempts = await this.prisma.messageLog.findMany({
+      where: { OR: [{ id: parentId }, { parentId }] }, orderBy: { createdAt: 'asc' },
+      select: { id: true, parentId: true, channelType: true, status: true, createdAt: true, updatedAt: true, readAt: true, attempts: true, attemptDetail: true, errorMessage: true, durationMs: true },
+    });
+    return { messageId: id, attempts };
+  }
+
+  async getRetentionPolicy() {
+    const row = await this.prisma.systemSetting.findUnique({ where: { key: 'messageRetentionDays' } });
+    return { days: Math.max(0, Number(row?.value) || 0) };
+  }
+
+  async dryRun(projectId: string, input: { title?: string; content?: string; html?: string; pushTemplate?: string; variables?: Record<string, unknown>; priority?: string; event?: string }) {
+    if (input.event) throw new BadRequestException('dry-run 暂不支持 event，请提供具体内容或 pushTemplate');
+    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
+    if (!project || !project.enabled) throw new BadRequestException('项目不存在或已禁用');
+    let title = input.title;
+    let content = input.content;
+    if (input.pushTemplate) {
+      const rendered = await this.pushTemplates.renderForSend(projectId, input.pushTemplate, input.variables || {});
+      const declared = extractRequiredTemplateVars(rendered.titleTpl, rendered.contentTpl);
+      const missing = missingTemplateVars(declared, input.variables);
+      if (missing.length) throw new BadRequestException(`推送模板缺少变量: ${missing.join(', ')}`);
+      title = rendered.title || title;
+      content = rendered.content || content;
+    }
+    if (!title && !content && !input.html) throw new BadRequestException('请提供消息内容');
+    const channels = await this.channels.listDispatchChannels(projectId);
+    const held = this.quietHours.shouldHold(project, input.priority);
+    return { dryRun: true, title, content, html: input.html, channels: channels.map((c) => ({ id: c.id, type: c.type })), quietHold: held, releaseAt: held ? this.quietHours.nextQuietEnd(project) : null, adminEmailConfigured: !!await this.projects.resolveAdminEmail(projectId) };
+  }
+
+  async setRetentionPolicy(days: number) {
+    if (!Number.isInteger(days) || days < 0 || days > 3650) throw new BadRequestException('days 必须为 0 到 3650 的整数，0 禁用自动清理');
+    await this.prisma.systemSetting.upsert({ where: { key: 'messageRetentionDays' }, create: { key: 'messageRetentionDays', value: String(days) }, update: { value: String(days) } });
+    return { days };
+  }
+
+  async applyRetention() {
+    const { days } = await this.getRetentionPolicy();
+    if (!days) return { deleted: 0 };
+    return this.cleanup({ before: new Date(Date.now() - days * 86400000).toISOString() });
+  }
+
+  /** 设备推送历史 */
   async listDevicePushHistory(opts: {
     registrationId?: string;
     projectId?: string;
@@ -1971,11 +2135,8 @@ export class MessagesService {
         (typeof cfg.registrationId === 'string' && cfg.registrationId) ||
         null;
       const fb = this.parseEmailFallback(payload);
-      const unread = !m.readAt && !fb.used;
-      // click | email_fallback | null
-      let readVia: 'click' | 'email_fallback' | null = null;
-      if (fb.used) readVia = 'email_fallback';
-      else if (m.readAt) readVia = 'click';
+      const unread = !m.readAt;
+      const readVia = m.readAt ? 'click' : null;
       return {
         id: m.id,
         projectId: m.projectId,
@@ -1990,7 +2151,7 @@ export class MessagesService {
         title: m.title,
         content: m.content,
         registrationId,
-        readAt: m.readAt || (fb.at ? new Date(fb.at) : null),
+        readAt: m.readAt,
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
         errorMessage: m.errorMessage,
@@ -2002,7 +2163,7 @@ export class MessagesService {
         emailFallbackAt: fb.at || null,
         emailFallbackTo: fb.to || null,
         // 仅真正未读才允许重发
-        canResend: unread,
+        canResend: unread && !fb.used,
         fallbackPending: false as boolean,
       };
     });

@@ -24,6 +24,9 @@
             @keyup.enter="onSubmit"
           />
         </n-form-item>
+        <n-form-item label="动态验证码（已开启双重验证时填写）">
+          <n-input v-model:value="code" placeholder="6 位验证码" :maxlength="6" autocomplete="one-time-code" @keyup.enter="onSubmit" />
+        </n-form-item>
         <n-button type="primary" block size="large" :loading="loading" attr-type="submit" @click="onSubmit">
           登录
         </n-button>
@@ -45,6 +48,7 @@ import { getAdminPath } from '@/config';
 
 const username = ref('admin');
 const password = ref('');
+const code = ref('');
 const loading = ref(false);
 const auth = useAuthStore();
 const router = useRouter();
@@ -59,7 +63,7 @@ async function onSubmit() {
   }
   loading.value = true;
   try {
-    await auth.login(username.value, password.value);
+    await auth.login(username.value, password.value, code.value.trim() || undefined);
     message.success('登录成功');
     const redirect = typeof route.query.redirect === 'string' ? route.query.redirect : '/dashboard';
     // 禁止回跳到门户或管理入口本身

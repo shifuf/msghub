@@ -92,7 +92,7 @@ export class BarkAdapter implements ChannelAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify(data),
-      });
+      }, undefined, { allowHttp: true, allowPrivate: isCustom || config.allowPrivate === true });
       const resp = res.data as { code?: number; message?: string } | null;
       if (!res.ok || (resp && typeof resp.code === 'number' && resp.code !== 200)) {
         return {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { MessageStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { normalizeErrorCluster } from '../common/token.util';
@@ -43,7 +43,7 @@ export class DashboardService {
         where: { enabled: true, lastHealthOk: false },
       }),
       this.prisma.messageLog.count({ where: { status: MessageStatus.DELAYED } }),
-      this.prisma.messageLog.count({ where: { readAt: null } }),
+      this.prisma.messageLog.count({ where: { readAt: null, archivedAt: null } }),
     ]);
 
     return {
@@ -60,21 +60,33 @@ export class DashboardService {
     };
   }
 
-  async notifications(since?: string, limit = 20) {
-    const take = Math.min(50, Math.max(1, Number(limit) || 20));
-    const where: any = { archivedAt: null };
+  async notifications(since?: string, limit = 20, cursor?: string) {
+    const take = Math.min(100, Math.max(1, Math.floor(Number(limit) || 20)));
+    // Capture before querying so updates racing this page are covered by the next delta.
+    const serverTime = new Date().toISOString();
+    const delta = !!(since || cursor);
+    const where: any = delta ? {} : { archivedAt: null };
     if (since) {
       const d = new Date(since);
-      if (!Number.isNaN(d.getTime())) {
-        where.createdAt = { gt: d };
-      }
+      if (Number.isNaN(d.getTime())) throw new BadRequestException('since 日期无效');
+      where.updatedAt = { gte: d };
+    }
+    if (cursor) {
+      try {
+        if (cursor.length > 1000) throw Error();
+        const [time, id] = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
+        const d = new Date(time);
+        if (!Number.isFinite(d.getTime()) || typeof id !== 'string' || !id) throw Error();
+        delete where.updatedAt;
+        where.OR = [{ updatedAt: { gt: d } }, { updatedAt: d, id: { gt: id } }];
+      } catch { throw new BadRequestException('通知游标无效'); }
     }
 
-    const [items, pending, failed24h] = await Promise.all([
+    const [items, pending, failed24h, unreadCount] = await Promise.all([
       this.prisma.messageLog.findMany({
         where,
-        orderBy: { createdAt: 'desc' },
-        take,
+        orderBy: delta ? [{ updatedAt: 'asc' }, { id: 'asc' }] : [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: take + 1,
         include: {
           project: { select: { id: true, name: true } },
           channel: { select: { id: true, name: true, type: true } },
@@ -87,104 +99,76 @@ export class DashboardService {
           createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
         },
       }),
+      this.prisma.messageLog.count({ where: { readAt: null, archivedAt: null } }),
     ]);
 
+    const page = items.slice(0, take);
+    const last = page[page.length - 1];
     return {
-      items,
+      items: page,
       pending,
       failed24h,
-      serverTime: new Date().toISOString(),
+      hasMore: delta && items.length > take,
+      unreadCount,
+      nextCursor: delta && items.length > take && last ? Buffer.from(JSON.stringify([last.updatedAt.toISOString(), last.id])).toString('base64url') : null,
+      serverTime,
     };
   }
 
   async charts(days = 7) {
-    const d = Math.min(30, Math.max(1, Number(days) || 7));
-    // 使用本地日历日窗口，避免 UTC toISOString 导致跨日分桶错误
+    const d = Math.min(30, Math.max(1, Math.floor(Number(days) || 7)));
+    // All replicas use UTC calendar boundaries; aggregate in PostgreSQL, never load message bodies.
     const start = new Date();
-    start.setHours(0, 0, 0, 0);
-    start.setDate(start.getDate() - (d - 1));
-
-    const logs = await this.prisma.messageLog.findMany({
-      where: { createdAt: { gte: start } },
-      select: {
-        status: true,
-        channelType: true,
-        projectId: true,
-        createdAt: true,
-        project: { select: { id: true, name: true } },
-      },
-    });
-
-    const dayKey = (dt: Date) => {
-      const y = dt.getFullYear();
-      const m = String(dt.getMonth() + 1).padStart(2, '0');
-      const day = String(dt.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
-
+    start.setUTCHours(0, 0, 0, 0);
+    start.setUTCDate(start.getUTCDate() - (d - 1));
+    const [daily, byChannel, byProject, metricRows] = await Promise.all([
+      this.prisma.$queryRaw<any[]>`SELECT to_char("createdAt", 'YYYY-MM-DD') AS date,
+        count(*)::int AS total, count(*) FILTER (WHERE status='SUCCESS')::int AS success,
+        count(*) FILTER (WHERE status='FAILED')::int AS failed,
+        count(*) FILTER (WHERE status NOT IN ('SUCCESS','FAILED'))::int AS pending
+        FROM "MessageLog" WHERE "createdAt">=${start} GROUP BY 1 ORDER BY 1`,
+      this.prisma.$queryRaw<any[]>`SELECT COALESCE("channelType"::text,'UNKNOWN') AS type, count(*)::int AS count
+        FROM "MessageLog" WHERE "createdAt">=${start} GROUP BY 1 ORDER BY count DESC`,
+      this.prisma.$queryRaw<any[]>`SELECT m."projectId", COALESCE(p.name,'未归属') AS name, count(*)::int AS count,
+        count(*) FILTER (WHERE m.status='SUCCESS')::int AS success,
+        count(*) FILTER (WHERE m.status='FAILED')::int AS failed,
+        count(*) FILTER (WHERE m."deliveredAt" IS NOT NULL AND m."channelType"<>'INBOX')::int AS delivered,
+        count(*) FILTER (WHERE m."fallbackSentAt" IS NOT NULL OR m."parentId" IS NOT NULL)::int AS fallback,
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (m."deliveredAt"-m."createdAt"))*1000)
+          FILTER (WHERE m."deliveredAt" IS NOT NULL AND m."channelType"<>'INBOX') AS "latencyP95Ms"
+        FROM "MessageLog" m LEFT JOIN "Project" p ON p.id=m."projectId"
+        WHERE m."createdAt">=${start} GROUP BY m."projectId",p.name ORDER BY count DESC LIMIT 10`,
+      this.prisma.$queryRaw<any[]>`SELECT count(*)::int AS total,
+        count(*) FILTER (WHERE status='SUCCESS')::int AS success,
+        count(*) FILTER (WHERE "channelType"<>'INBOX' AND "deliveredAt" IS NOT NULL)::int AS delivered,
+        count(*) FILTER (WHERE "channelType"<>'INBOX')::int AS "externalAttempts",
+        count(*) FILTER (WHERE "channelType"='INBOX' AND status='SUCCESS')::int AS "inboxAccepted",
+        count(*) FILTER (WHERE "fallbackSentAt" IS NOT NULL OR "parentId" IS NOT NULL)::int AS fallback,
+        count(*) FILTER (WHERE status='PENDING' AND "createdAt"<now()-interval '5 minutes')::int AS "stalePending",
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM ("deliveredAt"-"createdAt"))*1000)
+          FILTER (WHERE "deliveredAt" IS NOT NULL AND "channelType"<>'INBOX') AS "latencyP95Ms",
+        percentile_cont(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM ("deliveryStartedAt"-"createdAt"))*1000)
+          FILTER (WHERE "deliveryStartedAt" IS NOT NULL) AS "queueWaitP95Ms"
+        FROM "MessageLog" WHERE "createdAt">=${start}`,
+    ]);
     const dayKeys: string[] = [];
     for (let i = 0; i < d; i++) {
       const dt = new Date(start);
-      dt.setDate(start.getDate() + i);
-      dayKeys.push(dayKey(dt));
+      dt.setUTCDate(start.getUTCDate() + i);
+      dayKeys.push(dt.toISOString().slice(0, 10));
     }
-    const trendMap = new Map<
-      string,
-      { success: number; failed: number; pending: number; total: number }
-    >();
-    for (const k of dayKeys) {
-      trendMap.set(k, { success: 0, failed: 0, pending: 0, total: 0 });
-    }
-    for (const log of logs) {
-      const key = dayKey(log.createdAt);
-      const row = trendMap.get(key);
-      if (!row) continue;
-      row.total += 1;
-      if (log.status === 'SUCCESS') row.success += 1;
-      else if (log.status === 'FAILED') row.failed += 1;
-      else row.pending += 1;
-    }
-    const trend = dayKeys.map((date) => ({ date, ...trendMap.get(date)! }));
-
-    const channelMap = new Map<string, number>();
-    for (const log of logs) {
-      const t = log.channelType || 'UNKNOWN';
-      channelMap.set(t, (channelMap.get(t) || 0) + 1);
-    }
-    const byChannel = Array.from(channelMap.entries())
-      .map(([type, count]) => ({ type, count }))
-      .sort((a, b) => b.count - a.count);
-
-    const projectMap = new Map<
-      string,
-      { name: string; count: number; success: number; failed: number }
-    >();
-    for (const log of logs) {
-      const id = log.projectId || '_none';
-      const name = log.project?.name || '未归属';
-      const row = projectMap.get(id) || { name, count: 0, success: 0, failed: 0 };
-      row.count += 1;
-      if (log.status === 'SUCCESS') row.success += 1;
-      if (log.status === 'FAILED') row.failed += 1;
-      projectMap.set(id, row);
-    }
-    const byProject = Array.from(projectMap.entries())
-      .map(([id, v]) => ({ projectId: id === '_none' ? null : id, ...v }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 10);
-
-    const successRate =
-      logs.length === 0
-        ? 0
-        : Math.round(
-            (logs.filter((l) => l.status === 'SUCCESS').length / logs.length) * 1000,
-          ) / 10;
-
+    const trendMap = new Map(daily.map(row => [row.date, row]));
+    const trend = dayKeys.map(date => trendMap.get(date) || { date, success: 0, failed: 0, pending: 0, total: 0 });
+    const metrics = metricRows[0];
+    metrics.externalSuccessRate = metrics.externalAttempts ? Math.round(metrics.delivered / metrics.externalAttempts * 1000) / 10 : 0;
+    metrics.fallbackRate = metrics.total ? Math.round(metrics.fallback / metrics.total * 1000) / 10 : 0;
     return {
       days: d,
+      timezone: 'UTC',
       since: start.toISOString(),
-      total: logs.length,
-      successRate,
+      total: metrics.total,
+      successRate: metrics.total ? Math.round(metrics.success / metrics.total * 1000) / 10 : 0,
+      metrics,
       trend,
       byChannel,
       byProject,
@@ -194,7 +178,8 @@ export class DashboardService {
   async errorClusters(days = 7) {
     const d = Math.min(30, Math.max(1, Number(days) || 7));
     const since = new Date(Date.now() - d * 24 * 60 * 60 * 1000);
-    const logs = await this.prisma.messageLog.findMany({
+    const failureWhere = {status: MessageStatus.FAILED, createdAt: { gte: since }, errorMessage: { not: null }};
+    const [logs, totalFailed] = await Promise.all([this.prisma.messageLog.findMany({
       where: {
         status: MessageStatus.FAILED,
         createdAt: { gte: since },
@@ -209,7 +194,7 @@ export class DashboardService {
       },
       orderBy: { createdAt: 'desc' },
       take: 2000,
-    });
+    }), this.prisma.messageLog.count({ where: failureWhere })]);
     const map = new Map<
       string,
       { key: string; count: number; sampleIds: string[]; sampleError: string }
@@ -228,7 +213,9 @@ export class DashboardService {
     }
     return {
       days: d,
-      totalFailed: logs.length,
+      totalFailed,
+      sampleSize: logs.length,
+      sampled: totalFailed > logs.length,
       clusters: Array.from(map.values()).sort((a, b) => b.count - a.count),
     };
   }

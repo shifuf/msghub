@@ -13,10 +13,21 @@ export class BackupController {
     return ok(await this.backup.exportConfig());
   }
 
+  @Post('export')
+  async protectedExport(@Body() body: any) {
+    return ok(await this.backup.exportConfig({ password: body?.password, redact: body?.redact === true }));
+  }
+
+  @Post('preview')
+  async preview(@Body() body: any) {
+    const payload = body?.version ? body : body?.data;
+    return ok(await this.backup.previewImport(payload, { password: body?.password }));
+  }
+
   @Post('import')
   async import(@Body() body: any) {
     // 允许直接 body 即导出 JSON，或 { data: ... }
-    const payload = body?.channels || body?.projects ? body : body?.data;
-    return ok(await this.backup.importConfig(payload));
+    const payload = body?.version ? body : body?.data;
+    return ok(await this.backup.importConfig(payload, { password: body?.password }));
   }
 }

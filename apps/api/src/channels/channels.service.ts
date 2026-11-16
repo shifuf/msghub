@@ -11,6 +11,7 @@ import { AdapterRegistry } from '../adapters/adapters.registry';
 import { maskChannelConfig } from '../common/utils';
 import { RealtimeService } from '../realtime/realtime.service';
 import { ActivityService } from '../activity/activity.service';
+import { safeAdapterSend } from '../common/delivery.util';
 import { sanitizeErrorMessage } from '../common/utils';
 import {
   resolveUnsubscribeSecret,
@@ -306,7 +307,7 @@ export class ChannelsService {
     });
 
     const started = Date.now();
-    const result = await adapter.send(config, {
+    const result = await safeAdapterSend(this.adapters, c.type, config, {
       title,
       content,
       to: toAddress || undefined,

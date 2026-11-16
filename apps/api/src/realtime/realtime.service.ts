@@ -1,5 +1,8 @@
-import { Injectable, MessageEvent } from '@nestjs/common';
+import { Injectable, MessageEvent, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { Observable, Subject, map } from 'rxjs';
+import { randomUUID } from 'crypto';
+import Redis from 'ioredis';
+import { resolveRedis } from '../common/env';
 
 export type RealtimeEvent = {
   type: 'message' | 'stats' | 'ping' | 'ready';
@@ -8,15 +11,53 @@ export type RealtimeEvent = {
 };
 
 @Injectable()
-export class RealtimeService {
+export class RealtimeService implements OnModuleInit, OnModuleDestroy {
   private readonly bus = new Subject<RealtimeEvent>();
+  private readonly instanceId = randomUUID();
+  private readonly channel = 'msghub:realtime:v1';
+  private publisher?: Redis;
+  private subscriber?: Redis;
+
+  private createRedis() {
+    return new Redis({ ...resolveRedis(), lazyConnect: true, enableOfflineQueue: false, maxRetriesPerRequest: 1, connectTimeout: 2000, retryStrategy: attempt => Math.min(250 * attempt, 5000) });
+  }
+
+  async onModuleInit() {
+    this.publisher = this.createRedis();
+    this.subscriber = this.createRedis();
+    this.publisher.on('error', () => undefined);
+    this.subscriber.on('error', () => undefined);
+    this.subscriber.on('message', (channel, raw) => {
+      if (channel !== this.channel || raw.length > 1024 * 1024) return;
+      try {
+        const envelope = JSON.parse(raw);
+        if (envelope.instanceId === this.instanceId || typeof envelope.instanceId !== 'string') return;
+        const event = envelope.event;
+        if (!event || !['message', 'stats'].includes(event.type) || typeof event.at !== 'string') return;
+        this.bus.next(event);
+      } catch { /* Ignore malformed envelopes. Clients recover through incremental polling. */ }
+    });
+    this.subscriber.on('ready', () => { void this.subscriber?.subscribe(this.channel).catch(() => undefined); });
+    await Promise.allSettled([this.publisher.connect(), this.subscriber.connect().then(() => this.subscriber!.subscribe(this.channel))]);
+  }
+
+  onModuleDestroy() {
+    this.publisher?.disconnect();
+    this.subscriber?.disconnect();
+    this.bus.complete();
+  }
 
   emit(type: RealtimeEvent['type'], data: any) {
-    this.bus.next({
+    const event: RealtimeEvent = {
       type,
       data,
       at: new Date().toISOString(),
-    });
+    };
+    this.bus.next(event);
+    if (this.publisher && (type === 'message' || type === 'stats')) {
+      const payload = JSON.stringify({ instanceId: this.instanceId, event });
+      if (Buffer.byteLength(payload) <= 1024 * 1024) void this.publisher.publish(this.channel, payload).catch(() => undefined);
+    }
   }
 
   emitMessage(message: any) {

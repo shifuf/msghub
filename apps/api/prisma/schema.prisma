@@ -51,6 +51,11 @@ model AdminUser {
   id           String    @id @default(cuid())
   username     String    @unique
   passwordHash String
+  tokenVersion Int       @default(0)
+  totpSecret   String?
+  totpPendingSecret String?
+  totpEnabled Boolean @default(false)
+  totpLastCounter BigInt?
   lastLoginAt  DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -81,9 +86,9 @@ model Project {
   rateLimitPerMin         Int?
   idempotencyTtlMin       Int                @default(30)
   inboundToken            String?            @unique
-  /// 超过 N 小时未点击查看（readAt 为空）时，兜底发邮件
+  /// 未点击查看（readAt 为空）时，兜底发邮件
   unreadEmailFallbackEnabled Boolean         @default(false)
-  /// 未读兜底等待小时数（可填小数语义的小时整数，最小 1）
+  /// 历史字段名；实际单位为分钟。API 新字段 unreadEmailFallbackMinutes 映射此列。
   unreadEmailFallbackHours   Int             @default(24)
   /// 未读兜底邮件模板 code（项目/全局）；空则用 title/content 原文
   unreadEmailTemplateCode    String?
@@ -124,6 +129,7 @@ model IdempotencyRecord {
   key       String
   messageId String?
   response  Json?
+  owner     String?
   expiresAt DateTime
   createdAt DateTime @default(now())
 
@@ -243,6 +249,8 @@ model EmailTemplate {
   variables  Json?
   isSystem   Boolean  @default(false)
   enabled    Boolean  @default(true)
+  draft      Json?
+  revision   Int      @default(1)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -260,6 +268,8 @@ model PushTemplate {
   contentTpl String
   variables  Json?
   enabled    Boolean  @default(true)
+  draft      Json?
+  revision   Int      @default(1)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
 
@@ -291,6 +301,9 @@ model MessageLog {
   attemptDetail Json?
   nextRetryAt   DateTime?
   readAt        DateTime?
+  deliveredAt   DateTime?
+  deliveryStartedAt DateTime?
+  fallbackSentAt DateTime?
   archivedAt    DateTime?
   parentId      String?
   createdAt     DateTime         @default(now())
@@ -304,6 +317,19 @@ model MessageLog {
   @@index([toAddress, createdAt])
   @@index([status, nextRetryAt])
   @@index([eventCode])
+  @@index([updatedAt, id])
+}
+
+model TemplateRevision {
+  id         String   @id @default(cuid())
+  kind       String
+  templateId String
+  revision   Int
+  snapshot   Json
+  createdAt  DateTime @default(now())
+
+  @@unique([kind, templateId, revision])
+  @@index([kind, templateId, createdAt])
 }
 
 model ScheduledMessage {
@@ -324,11 +350,26 @@ model ScheduledMessage {
   status       String       @default("PENDING")
   lastError    String?
   messageId    String?
+  leaseUntil   DateTime?
+  executionKey String?
+  attempt      Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
 
   @@index([status, runAt])
+  @@index([status, leaseUntil])
   @@index([projectId])
+}
+
+// Audit archive of pre-migration duplicate global configuration rows.
+model MigrationArchive {
+  migration String
+  tableName String
+  rowId String
+  snapshot Json
+  archivedAt DateTime @default(now())
+
+  @@id([migration, tableName, rowId])
 }
 
 model ActivityLog {

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { SimplePushController } from './simple-push.controller';
+import { OpenApiSchemaController } from './schema.controller';
 import { MessagesModule } from '../messages/messages.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { EmailPolicyModule } from '../email-policy/email-policy.module';
@@ -9,7 +10,7 @@ import { ProjectRateLimitService } from '../common/project-rate-limit.service';
 
 @Module({
   imports: [MessagesModule, ProjectsModule, EmailPolicyModule, TemplatesModule],
-  controllers: [SimplePushController],
+  controllers: [SimplePushController, OpenApiSchemaController],
   providers: [IdempotencyService, ProjectRateLimitService],
   exports: [IdempotencyService, ProjectRateLimitService],
 })

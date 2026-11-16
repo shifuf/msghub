@@ -20,6 +20,9 @@ export const STATUS_LABELS: Record<string, string> = {
   SUCCESS: '成功',
   FAILED: '失败',
   DELAYED: '静默延迟',
+  UNCERTAIN: '结果待核实',
+  RUNNING: '执行中',
+  PAUSED: '已暂停',
 };
 
 export const PRIORITY_LABELS: Record<string, string> = {
@@ -59,6 +62,7 @@ export function statusTagType(status: string): 'default' | 'success' | 'error' |
   if (status === 'SUCCESS') return 'success';
   if (status === 'FAILED') return 'error';
   if (status === 'PENDING') return 'warning';
+  if (status === 'UNCERTAIN') return 'warning';
   if (status === 'DELAYED') return 'info';
   return 'default';
 }

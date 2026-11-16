@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'crypto';
+import Handlebars from 'handlebars';
 
 export type UnsubscribePayload = {
   email: string;
@@ -22,7 +23,7 @@ export function resolveUnsubscribeSecret(
 ): string {
   const s = String(raw || '').trim();
   if (s && !WEAK_SECRETS.has(s) && s.length >= 16) return s;
-  if (opts?.allowDevFallback && process.env.NODE_ENV !== 'production') {
+  if (opts?.allowDevFallback && process.env.NODE_ENV !== 'production' && process.env.APP_ENV !== 'production') {
     return 'msg-unsub-dev-only-not-for-prod';
   }
   throw new Error(
@@ -89,59 +90,56 @@ export function maskEmail(email: string): string {
 
 /** 从 handlebars 模板抽取 {{var}} 标识符（忽略 # / / else） */
 export function extractTemplateVars(...sources: (string | null | undefined)[]): string[] {
+  return extractTemplatePaths(sources, false);
+}
+
+/** Conditional sections are optional; declarations are editor suggestions. */
+export function extractRequiredTemplateVars(...sources: (string | null | undefined)[]): string[] {
+  return extractTemplatePaths(sources, true);
+}
+
+function extractTemplatePaths(sources: (string | null | undefined)[], requiredOnly: boolean): string[] {
   const set = new Set<string>();
-  const re = /\{\{\s*([#/]?)([a-zA-Z_][\w]*)/g;
+  const addPath = (node: any, context: boolean) => {
+    if (node?.type !== 'PathExpression' || node.data || node.depth || context) return;
+    const path = String(node.original || '');
+    if (path && path !== 'this' && !path.startsWith('this.')) set.add(path);
+  };
+  const visit = (node: any, context = false) => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'MustacheStatement' || node.type === 'SubExpression' || node.type === 'BlockStatement') {
+      if (requiredOnly && node.type === 'BlockStatement' && ['if', 'unless'].includes(node.path?.original)) return;
+      const helper = node.type === 'BlockStatement' || (node.params?.length ?? 0) > 0 || (node.hash?.pairs?.length ?? 0) > 0;
+      if (!helper) addPath(node.path, context);
+      for (const param of node.params || []) {
+        addPath(param, context);
+        if (param.type === 'SubExpression') visit(param, context);
+      }
+      for (const pair of node.hash?.pairs || []) { addPath(pair.value, context); visit(pair.value, context); }
+      const scoped = context || ['each', 'with'].includes(node.path?.original);
+      if (node.program) visit(node.program, scoped);
+      if (node.inverse) visit(node.inverse, context);
+      return;
+    }
+    for (const item of node.body || []) visit(item, context);
+  };
   for (const src of sources) {
     if (!src) continue;
-    let m: RegExpExecArray | null;
-    const s = String(src);
-    while ((m = re.exec(s))) {
-      if (m[1] === '/' || m[1] === '#') continue;
-      const name = m[2];
-      if (name === 'else' || name === 'this') continue;
-      set.add(name);
-    }
+    visit(Handlebars.parse(String(src)));
   }
   return [...set];
 }
 
-/** 可选变量：缺省不报错 */
-export const OPTIONAL_TEMPLATE_VARS = new Set([
-  'unsubscribeUrl',
-  'ip',
-  'time',
-  'actionUrl',
-  'verifyUrl',
-  'resetUrl',
-  'code',
-  'host',
-  'link',
-  'location',
-  'device',
-  'remark',
-  'note',
-  'footer',
-  'commit',
-  'duration',
-  'image',
-  'icon',
-  'subtitle',
-  'group',
-  'sound',
-  'url',
-  'level',
-]);
-
 export function missingTemplateVars(
   required: string[] | null | undefined,
   variables: Record<string, unknown> | null | undefined,
-  opts?: { strictOptional?: boolean },
 ): string[] {
   if (!required?.length) return [];
   const vars = variables || {};
   return required.filter((k) => {
-    if (!opts?.strictOptional && OPTIONAL_TEMPLATE_VARS.has(k)) return false;
-    const v = vars[k];
+    const v = k.split('.').reduce<unknown>((value, part) =>
+      value != null && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, part)
+        ? (value as Record<string, unknown>)[part] : undefined, vars);
     return v === undefined || v === null || v === '';
   });
 }

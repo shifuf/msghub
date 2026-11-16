@@ -2,15 +2,27 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { AppModule } from './app.module';
 import { AllExceptionsFilter } from './common/http-exception.filter';
+import { configureBodyParsers } from './common/body-parser';
+import { JwtService } from '@nestjs/jwt';
+import { JwtStrategy } from './auth/jwt.strategy';
 import {
   resolveAppEnv,
   resolveCorsOrigin,
   resolvePort,
   resolveSiteUrl,
+  resolveTrustProxy,
 } from './common/env';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create(AppModule, { bodyParser: false });
+  configureBodyParsers(app.getHttpAdapter().getInstance(), async req => {
+    const match = /^Bearer (\S+)$/i.exec(String(req.headers.authorization || ''));
+    if (!match) throw new Error('Missing token');
+    const payload = await app.get(JwtService).verifyAsync(match[1], { algorithms: ['HS256'] });
+    await app.get(JwtStrategy).validate(payload);
+  });
+  app.enableShutdownHooks();
+  app.getHttpAdapter().getInstance().set('trust proxy', resolveTrustProxy());
 
   app.enableCors({
     origin: resolveCorsOrigin(),

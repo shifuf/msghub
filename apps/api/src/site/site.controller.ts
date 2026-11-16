@@ -30,6 +30,9 @@ class SiteSettingsDto {
   @IsOptional() @IsString() siteContactEmail?: string;
   @IsOptional() @IsString() siteDescription?: string;
   @IsOptional() @IsString() globalAdminEmail?: string;
+  @IsOptional() @IsString() messageRetentionDays?: string;
+  @IsOptional() @IsString() activityRetentionDays?: string;
+  @IsOptional() @IsString() sensitiveRetentionDays?: string;
 }
 
 class PartnerDto {

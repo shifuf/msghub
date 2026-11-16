@@ -91,6 +91,7 @@ const router = createRouter({
           component: () => import('@/views/PartnersView.vue'),
         },
         { path: '/settings', name: 'settings', component: () => import('@/views/SettingsView.vue') },
+        { path: '/queue', name: 'queue', component: () => import('@/views/QueueView.vue') },
       ],
     },
     {

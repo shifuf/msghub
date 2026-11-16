@@ -27,6 +27,18 @@ import { ok } from '../common/utils';
 export class MessagesController {
   constructor(private messages: MessagesService) {}
 
+  @Get('retention')
+  async retention() { return ok(await this.messages.getRetentionPolicy()); }
+
+  @Post('retention')
+  async setRetention(@Body() body: { days: number }) { return ok(await this.messages.setRetentionPolicy(body.days)); }
+
+  @Get(':id/timeline')
+  async timeline(@Param('id') id: string) { return ok(await this.messages.timeline(id)); }
+
+  @Post('cleanup-preview')
+  async cleanupPreview(@Body() dto: CleanupDto) { return ok(await this.messages.cleanup({ ...dto, preview: true })); }
+
   @Get()
   async list(
     @Query('projectId') projectId?: string,
@@ -165,6 +177,11 @@ export class MessagesController {
   @Post('batch')
   async batch(@Body() dto: BatchSendDto) {
     return ok(await this.messages.batchSend(dto));
+  }
+
+  @Post('batch-preview')
+  async batchPreview(@Body() dto: BatchSendDto) {
+    return ok(await this.messages.batchPreview(dto));
   }
 
   @Post('batch-resend')
