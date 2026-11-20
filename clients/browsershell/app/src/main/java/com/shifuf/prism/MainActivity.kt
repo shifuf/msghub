@@ -40,6 +40,9 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.viewpager2.widget.ViewPager2
 import com.shifuf.prism.core.BOOKMARK_ROOT_ID
 import com.shifuf.prism.core.BrowserController
+import com.shifuf.prism.core.PageLoadIndicator
+import com.shifuf.prism.core.PageLoadState
+import com.shifuf.prism.core.PageLoadStatusClassifier
 import com.shifuf.prism.core.PreferenceStore
 import com.shifuf.prism.core.SearchEngine
 import com.shifuf.prism.core.SearchSuggestions
@@ -49,6 +52,8 @@ import com.shifuf.prism.core.UaProfile
 import com.shifuf.prism.qr.QrScanActivity
 import com.shifuf.prism.ui.BookmarksActivity
 import com.shifuf.prism.ui.DialogUi
+import com.shifuf.prism.core.DownloadBackend
+import com.shifuf.prism.core.DownloadHelper
 import com.shifuf.prism.ui.DownloadsActivity
 import com.shifuf.prism.ui.FilterRulesActivity
 import com.shifuf.prism.ui.HistoryActivity
@@ -68,6 +73,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
     private lateinit var sessionStore: SessionStore
     private lateinit var urlBar: EditText
     private lateinit var titleView: TextView
+    private lateinit var pageStatusIndicator: ImageButton
     private lateinit var progressBar: ProgressBar
     private lateinit var tabCountBadge: TextView
     private lateinit var tabSwitcher: FrameLayout
@@ -87,6 +93,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
 
     private var currentPageTitle: String = ""
     private var currentPageUrl: String = ""
+    private var currentPageLoadStatus = PageLoadIndicator()
     private var editingAddress: Boolean = false
     private var wallpaperRevision = com.shifuf.prism.core.WallpaperStore.revision.value
     private var menuPageCallback: ViewPager2.OnPageChangeCallback? = null
@@ -150,6 +157,13 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
         }
     }
 
+    private fun openSettings() {
+        settingsLauncher.launch(
+            Intent(this, SettingsActivity::class.java)
+                .putExtra(SnifferActivity.EXTRA_TAB_ID, tabManager.activeTabId)
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         runCatching {
             val night = (application as BrowserApp).prefs.nightMode
@@ -200,6 +214,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
 
         urlBar = findViewById(R.id.urlBar)
         titleView = findViewById(R.id.titleView)
+        pageStatusIndicator = findViewById(R.id.pageStatusIndicator)
         progressBar = findViewById(R.id.progressBar)
         tabCountBadge = findViewById(R.id.tabCountBadge)
         tabSwitcher = findViewById(R.id.tabSwitcher)
@@ -219,6 +234,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
         btnForward = findViewById(R.id.btnForward)
         btnRefresh = findViewById(R.id.btnRefresh)
         btnClearUrl = findViewById(R.id.btnClearUrl)
+        pageStatusIndicator.setOnClickListener { showPageStatusDialog(currentPageLoadStatus) }
         swipeRefresh = findViewById(R.id.swipeRefresh)
         val webContainer = findViewById<FrameLayout>(R.id.webContainer)
 
@@ -429,6 +445,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
         }
         editingAddress = true
         findViewById<View>(R.id.urlBarContainer).isActivated = true
+        updatePageStatusIndicator()
         titleView.visibility = View.GONE
         urlBar.visibility = View.VISIBLE
         val safe = when {
@@ -499,6 +516,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
     private fun showTitleMode() {
         titleView.visibility = View.VISIBLE
         urlBar.visibility = View.GONE
+        updatePageStatusIndicator()
         val title = currentPageTitle.trim()
         val isHome = isHomeUrl(currentPageUrl)
         titleView.text = when {
@@ -681,13 +699,10 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
             3 -> startActivity(Intent(this, BookmarksActivity::class.java))
             4 -> startActivity(Intent(this, HistoryActivity::class.java))
             5 -> startActivity(Intent(this, ScriptsActivity::class.java))
-            6 -> {
-                val page = tabManager.activeController?.currentUrl().orEmpty()
-                startActivity(
-                    Intent(this, SnifferActivity::class.java)
-                        .putExtra(SnifferActivity.EXTRA_PAGE_URL, page)
-                )
-            }
+            6 -> startActivity(
+                Intent(this, SnifferActivity::class.java)
+                    .putExtra(SnifferActivity.EXTRA_TAB_ID, tabManager.activeTabId)
+            )
             7 -> startActivity(Intent(this, NetworkLogActivity::class.java))
             8 -> ensureCameraAndScan()
             9 -> {
@@ -738,19 +753,24 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
             14 -> {
                 val url = tabManager.activeController?.currentUrl().orEmpty()
                 if (url.startsWith("http")) {
-                    val engine = if (app.prefs.downloadUseSystem) "系统" else "内置"
-                    com.shifuf.prism.core.DownloadHelper.resolveFileName(
+                    val backend = if (app.prefs.downloadUseSystem) DownloadBackend.SYSTEM else DownloadBackend.BUILTIN
+                    DownloadHelper.resolveFileName(
                         url = url,
                         pageUrl = url,
                     ) { name ->
                         runOnUiThread {
+                            val resolved = DownloadHelper.resolveBackend(url, url, backend)
                             DialogUi.showDownloadConfirm(
                                 context = this,
                                 fileName = name,
                                 url = url,
-                                engineLabel = engine,
+                                engineLabel = if (resolved == DownloadBackend.SYSTEM) "系统" else "内置",
                                 onConfirm = { chosen ->
-                                    app.downloads.enqueue(url = url, pageUrl = url, preferredName = chosen)
+                                    runCatching {
+                                        app.downloads.enqueue(url = url, pageUrl = url, backend = backend, preferredName = chosen)
+                                    }.onFailure {
+                                        Toast.makeText(this, "无法开始下载", Toast.LENGTH_LONG).show()
+                                    }
                                 }
                             )
                         }
@@ -759,7 +779,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
             }
             15 -> startActivity(Intent(this, DownloadsActivity::class.java))
             16 -> showSearchEnginePicker()
-            17 -> settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+            17 -> openSettings()
             18 -> startActivity(Intent(this, FilterRulesActivity::class.java))
             19 -> showHomeAppearancePicker()
             20 -> toggleNightMode()
@@ -1075,7 +1095,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
         val container = findViewById<FrameLayout>(R.id.webContainer)
         val web = (0 until container.childCount).mapNotNull { container.getChildAt(it) as? android.webkit.WebView }
             .firstOrNull { it.visibility == View.VISIBLE }
-        btnBack.isEnabled = web?.canGoBack() == true
+        btnBack.isEnabled = tabManager.activeController?.canGoBack() == true
         btnForward.isEnabled = web?.canGoForward() == true
         btnBack.alpha = if (btnBack.isEnabled) 1f else .35f
         btnForward.alpha = if (btnForward.isEnabled) 1f else .35f
@@ -1315,6 +1335,87 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
 
     override fun onStatus(text: String) {}
 
+    override fun onPageStatusChanged(status: PageLoadIndicator) {
+        runOnUiThread {
+            currentPageLoadStatus = status
+            if (::progressBar.isInitialized && status.state != PageLoadState.IDLE && status.state != PageLoadState.LOADING) {
+                progressBar.progress = 0
+                progressBar.visibility = View.GONE
+            }
+            if (::swipeRefresh.isInitialized && status.state != PageLoadState.LOADING) {
+                swipeRefresh.isRefreshing = false
+            }
+            if (::pageStatusIndicator.isInitialized) updatePageStatusIndicator()
+        }
+    }
+
+    private fun updatePageStatusIndicator() {
+        if (!::pageStatusIndicator.isInitialized) return
+
+        val state = currentPageLoadStatus.state
+        val hasPage = state != PageLoadState.IDLE && !isHomeUrl(currentPageUrl)
+        pageStatusIndicator.visibility = if (editingAddress || !hasPage) View.GONE else View.VISIBLE
+        pageStatusIndicator.setImageResource(
+            when (state) {
+                PageLoadState.SECURE -> R.drawable.ic_status_safe
+                PageLoadState.INSECURE, PageLoadState.HTTP_CLIENT_ERROR -> R.drawable.ic_status_warning
+                PageLoadState.NETWORK_ERROR,
+                PageLoadState.CERTIFICATE_ERROR,
+                PageLoadState.HTTP_SERVER_ERROR -> R.drawable.ic_status_error
+                PageLoadState.IDLE, PageLoadState.LOADING -> R.drawable.ic_status_dot
+            }
+        )
+        pageStatusIndicator.setColorFilter(
+            ContextCompat.getColor(
+                this,
+                when (state) {
+                    PageLoadState.SECURE -> R.color.via_success
+                    PageLoadState.INSECURE, PageLoadState.HTTP_CLIENT_ERROR -> R.color.via_warning
+                    PageLoadState.NETWORK_ERROR,
+                    PageLoadState.CERTIFICATE_ERROR,
+                    PageLoadState.HTTP_SERVER_ERROR -> R.color.via_danger
+                    PageLoadState.IDLE, PageLoadState.LOADING -> R.color.via_icon_disabled
+                }
+            )
+        )
+        pageStatusIndicator.contentDescription = when (state) {
+            PageLoadState.IDLE -> getString(R.string.url_hint)
+            PageLoadState.LOADING -> getString(R.string.page_status_loading)
+            PageLoadState.SECURE -> getString(R.string.page_status_secure)
+            PageLoadState.INSECURE -> getString(R.string.page_status_insecure)
+            PageLoadState.NETWORK_ERROR -> getString(R.string.page_status_network_error)
+            PageLoadState.CERTIFICATE_ERROR -> getString(R.string.page_status_certificate_error)
+            PageLoadState.HTTP_CLIENT_ERROR -> getString(
+                R.string.page_status_http_client_error,
+                currentPageLoadStatus.httpStatusCode ?: 400
+            )
+            PageLoadState.HTTP_SERVER_ERROR -> getString(
+                R.string.page_status_http_server_error,
+                currentPageLoadStatus.httpStatusCode ?: 500
+            )
+        }
+    }
+
+    private fun showPageStatusDialog(status: PageLoadIndicator) {
+        val explanation = PageLoadStatusClassifier.explanation(status)
+        if (explanation.isBlank()) return
+
+        val host = prettyHost(currentPageUrl)
+        val builder = DialogUi.material(this)
+            .setTitle(getString(R.string.page_status_dialog_title))
+            .setMessage(if (host.isBlank() || host == "主页") explanation else "$explanation\n\n网站：$host")
+
+        if (status.isError) {
+            builder
+                .setPositiveButton("重试") { _, _ -> tabManager.activeController?.reload() }
+                .setNeutralButton("返回主页") { _, _ -> goHome() }
+                .setNegativeButton("关闭", null)
+        } else {
+            builder.setPositiveButton("知道了", null)
+        }
+        builder.show()
+    }
+
     override fun onHomeAction(uri: String) {
         runOnUiThread {
             when {
@@ -1322,7 +1423,7 @@ class MainActivity : AppCompatActivity(), BrowserController.Callbacks {
                 uri == "bshome://history" -> startActivity(Intent(this, HistoryActivity::class.java))
                 uri == "bshome://downloads" -> startActivity(Intent(this, DownloadsActivity::class.java))
                 uri == "bshome://messages" -> startActivity(Intent(this, com.shifuf.prism.ui.PushHistoryActivity::class.java))
-                uri == "bshome://settings" -> settingsLauncher.launch(Intent(this, SettingsActivity::class.java))
+                uri == "bshome://settings" -> openSettings()
                 uri == "bshome://add" || uri.startsWith("bshome://add?") -> showAddHomeShortcutDialog()
                 uri.startsWith("bshome://edit") -> {
                     val id = runCatching { Uri.parse(uri).getQueryParameter("id") }.getOrNull().orEmpty()

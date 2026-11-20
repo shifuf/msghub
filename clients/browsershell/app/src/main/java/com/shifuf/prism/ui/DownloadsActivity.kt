@@ -23,6 +23,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.shifuf.prism.BrowserApp
 import com.shifuf.prism.R
 import com.shifuf.prism.core.DownloadBackend
+import com.shifuf.prism.core.DownloadHelper
 import com.shifuf.prism.core.DownloadItem
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.chip.Chip
@@ -241,29 +242,25 @@ class DownloadsActivity : PrismActivity() {
     }
 
     private fun confirmAndDownload(url: String, mime: String? = null, pageUrl: String? = null) {
-        val engine = if (BrowserApp.instance.prefs.downloadUseSystem) "系统" else "内置"
-        com.shifuf.prism.core.DownloadHelper.resolveFileName(
+        val backend = if (BrowserApp.instance.prefs.downloadUseSystem) DownloadBackend.SYSTEM else DownloadBackend.BUILTIN
+        DownloadHelper.resolveFileName(
             url = url,
             mimeType = mime,
             pageUrl = pageUrl,
         ) { name ->
             runOnUiThread {
+                val resolved = DownloadHelper.resolveBackend(url, pageUrl, backend)
                 DialogUi.showDownloadConfirm(
                     context = this,
                     fileName = name,
                     url = url,
-                    engineLabel = engine,
+                    engineLabel = if (resolved == DownloadBackend.SYSTEM) "系统" else "内置",
                     onConfirm = { chosen ->
-                        val backend = if (BrowserApp.instance.prefs.downloadUseSystem)
-                            DownloadBackend.SYSTEM else DownloadBackend.BUILTIN
-                        repo.enqueue(
-                            url = url,
-                            mimeType = mime,
-                            pageUrl = pageUrl,
-                            backend = backend,
-                            preferredName = chosen
-                        )
-                        refresh()
+                        runCatching {
+                            repo.enqueue(url = url, mimeType = mime, pageUrl = pageUrl, backend = backend, preferredName = chosen)
+                        }.onSuccess { refresh() }.onFailure {
+                            Toast.makeText(this, "无法开始下载", Toast.LENGTH_LONG).show()
+                        }
                     }
                 )
             }

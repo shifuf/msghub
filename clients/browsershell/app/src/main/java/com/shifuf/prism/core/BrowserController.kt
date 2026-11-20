@@ -2,8 +2,12 @@ package com.shifuf.prism.core
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.net.http.SslError
 import android.os.Build
+import android.os.Message
 import android.webkit.WebChromeClient
+import android.webkit.SslErrorHandler
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
@@ -18,13 +22,15 @@ import kotlinx.coroutines.launch
 
 class BrowserController(
     private val webView: WebView,
-    private val callbacks: Callbacks
+    private val callbacks: Callbacks,
+    private val tabId: String
 ) {
     interface Callbacks {
         fun onUrlChanged(url: String)
         fun onTitleChanged(title: String)
         fun onProgress(progress: Int)
         fun onStatus(text: String)
+        fun onPageStatusChanged(status: PageLoadIndicator) {}
         fun onIconChanged(icon: android.graphics.Bitmap?) {}
         fun onHomeAction(uri: String) {}
         /** Long-press on a link/image-link. */
@@ -35,10 +41,113 @@ class BrowserController(
 
     private val app get() = BrowserApp.instance
     private val injector = UserscriptInjector(webView)
-    private var currentPageUrl: String = "about:blank"
+    private val pageNavigation = PageNavigationStatus()
+    private val currentPageUrl: String get() = pageNavigation.url
     private var currentTitle: String = ""
     private var navigationVersion = 0L
     private var pendingHomeAppearance: Pair<Long, String>? = null
+    private data class MediaDocument(val url: String, val version: Long)
+    private var mediaVersion = 0L
+    private var displayedMedia: MediaDocument? = null
+    @Volatile private var mediaCapture: MediaDocument? = null
+
+    private fun emitPageStatus() {
+        callbacks.onPageStatusChanged(pageNavigation.indicator)
+    }
+
+    private fun beginNavigation(targetUrl: String, historyTraversal: Boolean = false) {
+        navigationVersion++
+        pageNavigation.expect(targetUrl, webView.url, historyTraversal)
+        suspendDisplayedMedia()
+        emitPageStatus()
+        callbacks.onUrlChanged(currentPageUrl)
+    }
+
+    private fun resumeDisplayedMedia() {
+        mediaCapture = displayedMedia?.takeIf { it.url == currentPageUrl && !pageNavigation.indicator.isConnectionFailure }
+        app.sniffer.setPageAvailable(tabId, available = mediaCapture != null)
+    }
+
+    private fun suspendDisplayedMedia() {
+        mediaCapture = null
+        app.sniffer.setPageAvailable(tabId, available = false)
+    }
+
+    private fun commitMediaDocument(sameDocument: Boolean) {
+        if (pageNavigation.indicator.isConnectionFailure) {
+            suspendDisplayedMedia()
+            return
+        }
+        val url = currentPageUrl
+        val version = displayedMedia?.version?.takeIf { sameDocument } ?: ++mediaVersion
+        app.sniffer.setPage(url, tabId, sameDocument, version)
+        displayedMedia = if (ResourceSniffer.isWebPage(url)) MediaDocument(url, version) else null
+        mediaCapture = displayedMedia
+    }
+
+    private fun reportInterruptedNavigation(result: PageNavigationStatus.Finish) {
+        when (result) {
+            PageNavigationStatus.Finish.RESTORED -> {
+                navigationVersion++
+                resumeDisplayedMedia()
+                callbacks.onUrlChanged(currentPageUrl)
+                currentTitle = if (InternalPage.isHome(currentPageUrl)) "主页" else webView.title.orEmpty()
+                if (currentTitle.isNotBlank()) callbacks.onTitleChanged(currentTitle)
+                callbacks.onStatus("加载已取消")
+            }
+            PageNavigationStatus.Finish.FAILURE -> {
+                suspendDisplayedMedia()
+                callbacks.onUrlChanged(currentPageUrl)
+                callbacks.onStatus("网页连接失败")
+            }
+            else -> return
+        }
+        emitPageStatus()
+        callbacks.onProgress(100)
+    }
+
+    private fun completeNavigation(view: WebView, result: PageNavigationStatus.Finish) {
+        if (result != PageNavigationStatus.Finish.DOCUMENT) {
+            reportInterruptedNavigation(result)
+            return
+        }
+        val finished = currentPageUrl
+        if (!ResourceSniffer.isWebPage(finished) && displayedMedia != null) commitMediaDocument(sameDocument = false)
+        val pageTitle = view.title?.trim().orEmpty()
+        if (finished == PreferenceStore.HOME_URL) {
+            applyPendingHomeAppearance()
+            currentTitle = "主页"
+            callbacks.onTitleChanged("主页")
+        } else if (pageTitle.isNotBlank() &&
+            !pageTitle.equals("about:blank", true) &&
+            pageTitle != finished &&
+            !pageTitle.startsWith("data:")
+        ) {
+            currentTitle = pageTitle
+            callbacks.onTitleChanged(currentTitle)
+        }
+        callbacks.onUrlChanged(finished)
+        emitPageStatus()
+        if (!pageNavigation.indicator.isError) callbacks.onStatus("完成")
+        if (finished != PreferenceStore.HOME_URL && !finished.startsWith("data:")) {
+            injectUaSpoof()
+            injector.injectForUrl(finished, "end")
+            injectElementHidingSafe()
+            injectMediaProbe()
+            if (!app.prefs.privateMode && currentTitle.isNotBlank()) {
+                app.historyStore.add(currentTitle, finished)
+            }
+        }
+        if (!app.prefs.privateMode) {
+            app.prefs.lastUrl = finished
+        }
+        if (app.prefs.debugServerEnabled) {
+            app.debugServer.broadcastEvent(
+                "page.finished",
+                mapOf("url" to finished, "title" to currentTitle)
+            )
+        }
+    }
 
     fun evaluateJs(script: String) {
         runCatching { webView.evaluateJavascript(script, null) }
@@ -90,8 +199,10 @@ class BrowserController(
         webView.settings.setSupportZoom(true)
         webView.isScrollbarFadingEnabled = true
         webView.setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
+            reportInterruptedNavigation(pageNavigation.cancelPending(url.orEmpty()))
+            val pageUrl = currentPageUrl
             webView.post {
-                confirmDownload(url, userAgent, contentDisposition, mimeType)
+                confirmDownload(url, userAgent, contentDisposition, mimeType, pageUrl)
             }
         }
         // Long-press links / images → native action sheet
@@ -161,6 +272,13 @@ class BrowserController(
                         view?.post { loadHome() }
                         return true
                     }
+                    // WebView may report a final redirect response before onPageStarted.
+                    if (view === webView && request?.isForMainFrame == true && pageNavigation.expectWebRequest(u, view.url)) {
+                        navigationVersion++
+                        suspendDisplayedMedia()
+                        emitPageStatus()
+                        callbacks.onUrlChanged(currentPageUrl)
+                    }
                     return false
                 }
                 // tel/mailto/intent etc. leave to system if possible, else ignore
@@ -173,17 +291,14 @@ class BrowserController(
             }
 
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                val real = when {
-                    url.isNullOrBlank() -> currentPageUrl
-                    InternalPage.isHome(url) -> PreferenceStore.HOME_URL
-                    else -> url
-                }
+                if (view !== webView || !pageNavigation.start(url.orEmpty(), view.url)) return
+                val real = currentPageUrl
                 if (real != PreferenceStore.HOME_URL) navigationVersion++
-                currentPageUrl = real
+                suspendDisplayedMedia()
                 currentTitle = if (real == PreferenceStore.HOME_URL) "主页" else ""
-                app.sniffer.setPage(if (real == PreferenceStore.HOME_URL) "" else real)
+                emitPageStatus()
                 callbacks.onUrlChanged(currentPageUrl)
-                callbacks.onStatus("加载中…")
+                if (!pageNavigation.indicator.isError) callbacks.onStatus("加载中…")
                 injectUaSpoof()
                 if (real == PreferenceStore.HOME_URL) {
                     callbacks.onTitleChanged("主页")
@@ -200,46 +315,73 @@ class BrowserController(
                 }
             }
 
-            override fun onPageFinished(view: WebView?, url: String?) {
-                val finished = when {
-                    url.isNullOrBlank() -> currentPageUrl
-                    InternalPage.isHome(url) -> PreferenceStore.HOME_URL
-                    else -> url
-                }
-                currentPageUrl = finished
-                val pageTitle = view?.title?.trim().orEmpty()
-                if (finished == PreferenceStore.HOME_URL) {
-                    applyPendingHomeAppearance()
-                    currentTitle = "主页"
-                    callbacks.onTitleChanged("主页")
-                } else if (pageTitle.isNotBlank() &&
-                    !pageTitle.equals("about:blank", true) &&
-                    pageTitle != currentPageUrl &&
-                    !pageTitle.startsWith("data:")
-                ) {
-                    currentTitle = pageTitle
-                    callbacks.onTitleChanged(currentTitle)
-                }
-                callbacks.onUrlChanged(currentPageUrl)
-                callbacks.onStatus("完成")
-                if (currentPageUrl != PreferenceStore.HOME_URL && !currentPageUrl.startsWith("data:")) {
-                    injectUaSpoof()
-                    injector.injectForUrl(if (finished == PreferenceStore.HOME_URL) url else finished, "end")
-                    injectElementHidingSafe()
-                    injectVideoProbe()
-                    if (!app.prefs.privateMode && currentTitle.isNotBlank()) {
-                        app.historyStore.add(currentTitle, currentPageUrl)
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                if (view !== webView) return
+                when (pageNavigation.updateHistory(url.orEmpty(), view.url)) {
+                    PageNavigationStatus.HistoryUpdate.NEW_DOCUMENT -> commitMediaDocument(sameDocument = false)
+                    PageNavigationStatus.HistoryUpdate.SAME_DOCUMENT -> {
+                        commitMediaDocument(sameDocument = true)
+                        callbacks.onUrlChanged(currentPageUrl)
+                        emitPageStatus()
                     }
+                    PageNavigationStatus.HistoryUpdate.IGNORED -> Unit
                 }
-                if (!app.prefs.privateMode) {
-                    app.prefs.lastUrl = currentPageUrl
-                }
-                if (app.prefs.debugServerEnabled) {
-                    app.debugServer.broadcastEvent(
-                        "page.finished",
-                        mapOf("url" to currentPageUrl, "title" to currentTitle)
-                    )
-                }
+            }
+
+            override fun onFormResubmission(view: WebView?, dontResend: Message?, resend: Message?) {
+                super.onFormResubmission(view, dontResend, resend)
+                if (view === webView) reportInterruptedNavigation(pageNavigation.cancelPending())
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                val url = request?.url?.toString().orEmpty()
+                val result = error ?: return
+                val description = result.description?.toString().orEmpty()
+                if (view !== webView || !pageNavigation.networkError(
+                        url,
+                        request?.isForMainFrame == true,
+                        result.errorCode,
+                        description
+                    )) return
+                if (PageLoadStatusClassifier.isNavigationCancelled(result.errorCode, description)) resumeDisplayedMedia()
+                else suspendDisplayedMedia()
+                callbacks.onUrlChanged(currentPageUrl)
+                emitPageStatus()
+                callbacks.onProgress(100)
+                callbacks.onStatus(if (pageNavigation.indicator.isError) "网页连接失败" else "加载已取消")
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                errorResponse: WebResourceResponse?
+            ) {
+                val url = request?.url?.toString().orEmpty()
+                val code = errorResponse?.statusCode ?: return
+                if (view !== webView || !pageNavigation.httpError(
+                        url, request?.isForMainFrame == true, code, request?.method
+                    )) return
+                emitPageStatus()
+                callbacks.onStatus("网页返回 HTTP $code")
+            }
+
+            override fun onReceivedSslError(view: WebView?, handler: SslErrorHandler?, error: SslError?) {
+                // Never allow an invalid, expired, or mismatched website certificate to continue.
+                handler?.cancel()
+                val failure = error ?: return
+                if (view !== webView || !pageNavigation.certificateError(failure.url.orEmpty(), failure.primaryError)) return
+                suspendDisplayedMedia()
+                emitPageStatus()
+                callbacks.onStatus("网页证书校验失败")
+            }
+
+            override fun onPageFinished(view: WebView?, url: String?) {
+                if (view !== webView) return
+                completeNavigation(view, pageNavigation.finish(url.orEmpty(), view.url, stillLoading = view.progress < 100))
             }
 
             override fun shouldInterceptRequest(
@@ -248,35 +390,41 @@ class BrowserController(
             ): WebResourceResponse? {
                 val url = request.url?.toString() ?: return null
                 val isMainFrame = request.isForMainFrame
+                val pageUrl = currentPageUrl
+                val mediaDocument = mediaCapture
                 val typeHint = request.requestHeaders["Accept"]
                     ?: request.requestHeaders["accept"]
                 val looksVideo = ResourceSniffer.isVideo(url, typeHint.orEmpty())
+                val looksAudio = ResourceSniffer.isAudio(url, typeHint.orEmpty())
                 // Fast path: skip adblock + logging when disabled and not interesting
                 val adOn = app.prefs.adBlockEnabled
                 val blocked = !isMainFrame &&
                     !looksVideo &&
                     adOn &&
-                    app.adBlock.shouldBlock(url, pageUrl = currentPageUrl)
+                    app.adBlock.shouldBlock(url, pageUrl = pageUrl)
                 if (blocked) {
                     if (app.prefs.debugServerEnabled) {
                         runCatching {
-                            app.networkLog.add(url, request.method ?: "GET", typeHint ?: "other", currentPageUrl, true)
+                            app.networkLog.add(url, request.method ?: "GET", typeHint ?: "other", pageUrl, true)
                         }
                     } else {
                         runCatching {
-                            app.networkLog.add(url, request.method ?: "GET", "blocked", currentPageUrl, true)
+                            app.networkLog.add(url, request.method ?: "GET", "blocked", pageUrl, true)
                         }
                     }
                     return emptyResponse()
                 }
-                if (looksVideo) {
-                    app.sniffer.onRequest(url, typeHint ?: "video", currentPageUrl)
+                if (looksVideo || looksAudio) {
+                    if (mediaDocument?.url == pageUrl &&
+                        (!isMainFrame || url.substringBefore('#') == pageUrl.substringBefore('#'))) {
+                        app.sniffer.onRequest(url, typeHint ?: if (looksAudio) "" else "video", pageUrl, tabId, mediaDocument.version)
+                    }
                     runCatching {
-                        app.networkLog.add(url, request.method ?: "GET", typeHint ?: "video", currentPageUrl, false)
+                        app.networkLog.add(url, request.method ?: "GET", typeHint ?: if (looksAudio) "audio" else "video", pageUrl, false)
                     }
                 } else if (isMainFrame) {
                     runCatching {
-                        app.networkLog.add(url, request.method ?: "GET", "document", currentPageUrl, false)
+                        app.networkLog.add(url, request.method ?: "GET", "document", pageUrl, false)
                     }
                 }
                 return null
@@ -284,7 +432,11 @@ class BrowserController(
         }
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                if (view !== webView) return
                 callbacks.onProgress(newProgress)
+                if (newProgress == 100 && view.progress == 100) {
+                    completeNavigation(view, pageNavigation.loadingStopped(view.url))
+                }
             }
 
             override fun onReceivedTitle(view: WebView?, title: String?) {
@@ -333,48 +485,61 @@ class BrowserController(
         }
     }
 
-    private fun injectVideoProbe() {
+    private fun injectMediaProbe() {
+        val document = mediaCapture ?: return
         val js = """
             (function(){
               try {
-                const urls = new Set();
-                document.querySelectorAll('video,video source,source[type*="video"],source[src*=".m3u8"],source[src*=".mp4"]').forEach(el=>{
+                const urls = new Map();
+                function record(url, hint) {
+                  if (!url || !/^https?:\/\//i.test(url)) return;
+                  const previous = urls.get(url);
+                  if (!urls.has(url) || ((!previous || previous === 'video-probe') && hint && hint !== 'video-probe')) {
+                    urls.set(url, hint);
+                  }
+                }
+                document.querySelectorAll('audio,audio source,video,video source,source[type*="video"],source[src*=".m3u8"],source[src*=".mp4"]').forEach(el=>{
                   const s = el.currentSrc || el.src || el.getAttribute('src');
-                  if (s && s.indexOf('http')===0) urls.add(s);
+                  const audio = el.matches('audio,audio source');
+                  record(s, el.getAttribute('type') || (audio ? '' : 'video-probe'));
                 });
                 // common players store urls on attributes
                 document.querySelectorAll('[data-src],[data-url],[data-video]').forEach(el=>{
                   ['data-src','data-url','data-video'].forEach(k=>{
                     const s = el.getAttribute(k);
-                    if (s && /https?:/.test(s) && /\.(mp4|m3u8|mpd|flv|webm)/i.test(s)) urls.add(s);
+                    if (s && !urls.has(s) && /\.(mp4|m3u8|mpd|flv|webm)/i.test(s)) record(s, 'video-probe');
                   });
                 });
-                return Array.from(urls).slice(0,30).join('\n');
-              } catch(e){ return ''; }
+                return Array.from(urls).slice(0,30);
+              } catch(e){ return []; }
             })();
         """.trimIndent()
         webView.post {
+            if (!webView.isAttachedToWindow || mediaCapture?.version != document.version) return@post
             webView.evaluateJavascript(js) { result ->
-                val raw = result?.trim()?.trim('"')?.replace("\\n", "\n")?.replace("\\\"", "\"")
-                    ?.replace("\\\\", "\\").orEmpty()
-                if (raw.isBlank() || raw == "null") return@evaluateJavascript
-                raw.lineSequence()
-                    .map { it.trim() }
-                    .filter { it.startsWith("http") }
-                    .forEach { u -> app.sniffer.onRequest(u, "video-probe", currentPageUrl) }
+                val current = mediaCapture?.takeIf { it.version == document.version } ?: return@evaluateJavascript
+                if (result == null) return@evaluateJavascript
+                val urls = runCatching { org.json.JSONArray(result) }.getOrNull() ?: return@evaluateJavascript
+                for (index in 0 until urls.length()) {
+                    val entry = urls.optJSONArray(index) ?: continue
+                    val url = entry.optString(0)
+                    val hint = entry.optString(1)
+                    if (ResourceSniffer.isAudio(url, hint) && app.prefs.adBlockEnabled &&
+                        app.adBlock.shouldBlock(url, pageUrl = current.url)) continue
+                    app.sniffer.onRequest(url, hint, current.url, tabId, current.version)
+                }
             }
         }
     }
 
     fun load(raw: String) {
-        navigationVersion++
         val t = raw.trim()
         if (t.isEmpty() || t == PreferenceStore.HOME_URL || t == "about:home" || t == "about:blank") {
             loadHome()
             return
         }
         val url = normalizeUrl(t)
-        app.sniffer.setPage(url)
+        beginNavigation(url)
         val headers = mapOf(
             "Accept-Language" to "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
         )
@@ -382,11 +547,10 @@ class BrowserController(
     }
 
     fun loadHome() {
-        val version = ++navigationVersion
-        currentPageUrl = PreferenceStore.HOME_URL
+        beginNavigation(PreferenceStore.HOME_URL)
+        val version = navigationVersion
         currentTitle = "主页"
-        app.sniffer.setPage("")
-        callbacks.onUrlChanged(PreferenceStore.HOME_URL)
+        webView.stopLoading()
         callbacks.onTitleChanged("主页")
 
         // Serve cached HTML immediately when available (avoids multi-second freezes)
@@ -502,14 +666,42 @@ class BrowserController(
         ).joinToString("::")
     }
 
-    fun reload() { if (InternalPage.isHome(currentPageUrl)) loadHome() else webView.reload() }
-    fun goBack(): Boolean = if (webView.canGoBack()) {
-        webView.goBack(); true
-    } else false
+    fun reload() {
+        val target = currentUrl()
+        when {
+            InternalPage.isHome(target) -> loadHome()
+            // A failed connection can leave the previous document in the WebView.
+            pageNavigation.indicator.isError &&
+                !PageLoadStatusClassifier.isCurrentMainFrameUrl(target, webView.url.orEmpty()) -> load(target)
+            else -> {
+                beginNavigation(target)
+                webView.reload()
+            }
+        }
+    }
 
-    fun goForward(): Boolean = if (webView.canGoForward()) {
-        webView.goForward(); true
-    } else false
+    fun canGoBack(): Boolean = pageNavigation.canRestoreAfterConnectionFailure(webView.url) || webView.canGoBack()
+
+    fun goBack(): Boolean {
+        val restored = pageNavigation.restoreAfterConnectionFailure(webView.url)
+        if (restored == PageNavigationStatus.Finish.RESTORED) {
+            reportInterruptedNavigation(restored)
+            return true
+        }
+        return traverseHistory(-1)
+    }
+
+    fun goForward(): Boolean = traverseHistory(1)
+
+    private fun traverseHistory(direction: Int): Boolean {
+        val history = webView.copyBackForwardList()
+        val targetIndex = history.currentIndex + direction
+        if (targetIndex !in 0 until history.size) return false
+        val targetUrl = history.getItemAtIndex(targetIndex)?.url.orEmpty().ifBlank { return false }
+        beginNavigation(if (InternalPage.isHome(targetUrl)) PreferenceStore.HOME_URL else targetUrl, historyTraversal = true)
+        if (direction < 0) webView.goBack() else webView.goForward()
+        return true
+    }
 
     fun setDesktopMode(enabled: Boolean, reload: Boolean = true) {
         applyUserAgent(reload = reload)
@@ -524,11 +716,13 @@ class BrowserController(
                 loadHome()
             } else if (url.startsWith("http")) {
                 // Soft reload with correct UA already applied — no cache wipe needed.
+                beginNavigation(url)
                 webView.loadUrl(
                     url,
                     mapOf("Accept-Language" to "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7")
                 )
             } else {
+                beginNavigation(url)
                 webView.reload()
             }
         } else {
@@ -559,36 +753,39 @@ class BrowserController(
         url: String,
         userAgent: String?,
         contentDisposition: String?,
-        mimeType: String?
+        mimeType: String?,
+        pageUrl: String,
     ) {
         val ctx = webView.context
-        val engine = if (app.prefs.downloadUseSystem) "系统下载" else "内置下载"
-        val activity = (ctx as? android.app.Activity) ?: ctx
+        val backend = if (app.prefs.downloadUseSystem) DownloadBackend.SYSTEM else DownloadBackend.BUILTIN
         // 短链 / 无扩展名路径：先探测真实文件名，再弹确认框
         DownloadHelper.resolveFileName(
             url = url,
             userAgent = userAgent,
             contentDisposition = contentDisposition,
             mimeType = mimeType,
-            pageUrl = currentPageUrl,
+            pageUrl = pageUrl,
         ) { name ->
             webView.post {
+                val resolved = DownloadHelper.resolveBackend(url, pageUrl, backend)
                 com.shifuf.prism.ui.DialogUi.showDownloadConfirm(
-                    context = activity,
+                    context = ctx,
                     fileName = name,
                     url = url,
-                    engineLabel = engine,
+                    engineLabel = if (resolved == DownloadBackend.SYSTEM) "系统" else "内置",
                     onConfirm = { chosen ->
                         runCatching {
-                            DownloadHelper.enqueue(
-                                context = ctx,
+                            app.downloads.enqueue(
                                 url = url,
                                 userAgent = userAgent,
                                 contentDisposition = contentDisposition,
                                 mimeType = mimeType,
-                                pageUrl = currentPageUrl,
-                                preferredName = chosen
+                                pageUrl = pageUrl,
+                                backend = backend,
+                                preferredName = chosen,
                             )
+                        }.onFailure {
+                            android.widget.Toast.makeText(ctx, "无法开始下载", android.widget.Toast.LENGTH_LONG).show()
                         }
                     }
                 )
@@ -601,14 +798,7 @@ class BrowserController(
         // Do NOT invert webpage colors.
     }
 
-    fun currentUrl(): String {
-        val u = webView.url ?: currentPageUrl
-        return when {
-            InternalPage.isHome(u) -> PreferenceStore.HOME_URL
-            currentPageUrl == PreferenceStore.HOME_URL -> PreferenceStore.HOME_URL
-            else -> u
-        }
-    }
+    fun currentUrl(): String = currentPageUrl
 
     fun currentTitle(): String = currentTitle.ifBlank { webView.title.orEmpty() }
 

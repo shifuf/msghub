@@ -8,6 +8,7 @@ import android.content.pm.ResolveInfo
 import android.graphics.drawable.Drawable
 import android.net.Uri
 import android.os.Build
+import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 
 data class PlayerApp(
@@ -68,7 +69,7 @@ object ExternalPlayerHelper {
         "com.tencent.mtt" // 播霸（QQ浏览器）
     )
 
-    fun queryPlayers(context: Context, url: String): List<PlayerApp> {
+    fun queryPlayers(context: Context, url: String, audioMimeType: String? = null): List<PlayerApp> {
         val pm = context.packageManager
         val myPkg = context.packageName
         // dedupe by package only (one entry per app)
@@ -96,12 +97,14 @@ object ExternalPlayerHelper {
         }
 
         val flags = resolveFlags()
-        buildCandidateIntents(url).forEach { intent ->
+        val candidates = if (audioMimeType == null) buildCandidateIntents(url) else listOf(buildViewIntent(url, audioMimeType))
+        candidates.forEach { intent ->
             @Suppress("DEPRECATION")
             pm.queryIntentActivities(intent, flags).forEach { consider(it) }
         }
 
-        KNOWN_PLAYER_PACKAGES.forEach { pkg ->
+        val fallbackPackages = if (audioMimeType == null) KNOWN_PLAYER_PACKAGES else emptyList()
+        fallbackPackages.forEach { pkg ->
             if (found.containsKey(pkg)) return@forEach
             if (BLOCKED_PACKAGES.contains(pkg) && !ALLOWED_BROWSER_PLAYERS.contains(pkg)) return@forEach
             runCatching {
@@ -133,16 +136,25 @@ object ExternalPlayerHelper {
         return found.values.sortedBy { it.label.lowercase() }
     }
 
-    fun play(context: Context, url: String, player: PlayerApp? = null) {
+    fun play(context: Context, url: String, player: PlayerApp? = null, audioMimeType: String? = null) {
         if (player == null) {
-            context.startActivity(Intent.createChooser(buildViewIntent(url), "通过应用播放"))
+            if (audioMimeType == null) {
+                context.startActivity(Intent.createChooser(buildViewIntent(url), "通过应用播放"))
+            } else {
+                Toast.makeText(context, "没有可播放此音频格式的应用", Toast.LENGTH_SHORT).show()
+            }
             return
         }
-        val view = buildViewIntent(url).apply {
+        val view = buildViewIntent(url, audioMimeType).apply {
             component = ComponentName(player.packageName, player.activityName)
             setPackage(player.packageName)
         }
-        runCatching { context.startActivity(view) }
+        val opened = runCatching { context.startActivity(view) }
+        if (audioMimeType != null) {
+            opened.onFailure { Toast.makeText(context, "无法打开此音频链接", Toast.LENGTH_SHORT).show() }
+            return
+        }
+        opened
             .recoverCatching {
                 context.startActivity(
                     Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
@@ -160,39 +172,41 @@ object ExternalPlayerHelper {
         context: Context,
         url: String,
         rememberedPackage: String?,
+        audioMimeType: String? = null,
         onRemember: (PlayerApp?) -> Unit
     ) {
-        val players = queryPlayers(context, url)
+        val players = queryPlayers(context, url, audioMimeType)
         if (players.isEmpty()) {
-            play(context, url, null)
+            play(context, url, audioMimeType = audioMimeType)
             return
         }
         if (!rememberedPackage.isNullOrBlank()) {
             val remembered = players.find { it.packageName == rememberedPackage }
             if (remembered != null) {
-                play(context, url, remembered)
+                play(context, url, remembered, audioMimeType)
                 return
             }
         }
         val labels = players.map { it.label }.toTypedArray()
+        val media = if (audioMimeType == null) "视频" else "音频"
         AlertDialog.Builder(context)
-            .setTitle("外置视频播放器")
+            .setTitle("外置${media}播放器")
             .setSingleChoiceItems(labels, -1) { dialog, which ->
                 val chosen = players[which]
                 dialog.dismiss()
                 AlertDialog.Builder(context)
                     .setTitle(chosen.label)
-                    .setMessage("当选择外置播放器播放视频时，使用该应用？")
+                    .setMessage("当选择外置播放器播放${media}时，使用该应用？")
                     .setPositiveButton("记住") { _, _ ->
                         onRemember(chosen)
-                        play(context, url, chosen)
+                        play(context, url, chosen, audioMimeType)
                     }
                     .setNegativeButton("仅此一次") { _, _ ->
-                        play(context, url, chosen)
+                        play(context, url, chosen, audioMimeType)
                     }
                     .setNeutralButton("清除记忆") { _, _ ->
                         onRemember(null)
-                        play(context, url, chosen)
+                        play(context, url, chosen, audioMimeType)
                     }
                     .show()
             }
@@ -221,8 +235,8 @@ object ExternalPlayerHelper {
         }
     }
 
-    private fun buildViewIntent(url: String): Intent {
-        val mime = when {
+    private fun buildViewIntent(url: String, audioMimeType: String? = null): Intent {
+        val mime = audioMimeType ?: when {
             url.contains(".m3u8", true) -> "application/x-mpegURL"
             url.contains(".mpd", true) -> "application/dash+xml"
             url.contains(".webm", true) -> "video/webm"

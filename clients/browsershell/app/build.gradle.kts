@@ -25,8 +25,8 @@ android {
         applicationId = "com.shifuf.prism"
         minSdk = 26
         targetSdk = 35
-        versionCode = 36
-        versionName = "2.2.3"
+        versionCode = 37
+        versionName = "2.2.4"
         buildConfigField("int", "DEBUG_PORT", "19222")
         buildConfigField("String", "JPUSH_APPKEY", "\"3549f3f7e72ca47a3021991c\"")
         // NOTE: Master Secret must stay server-side only — never put it in the APK.

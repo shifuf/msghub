@@ -1,6 +1,6 @@
 {
-  "version": "2.2.3",
-  "versionCode": 36,
+  "version": "2.2.4",
+  "versionCode": 37,
   "files": [
     {
       "path": ".gitignore",
@@ -8,7 +8,7 @@
     },
     {
       "path": "app/build.gradle.kts",
-      "sha256": "f0e1f2ab70603229542e3066a17fe74711b83b957f40c84d76df0e341bce0465"
+      "sha256": "dec0132cb95bacb39648f75be92429ee3020d5897ee437e819c606a39bd01b41"
     },
     {
       "path": "app/libs/jcore-android-5.4.0.aar",
@@ -168,7 +168,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/MainActivity.kt",
-      "sha256": "528cec61076fe1b9f20f390b70f1b75b441649cccd89a730ca8cf2f32dafd2e3"
+      "sha256": "90b3fe7116137b4081842125424fe5f89262ebf902ca638709fc20a27a821a90"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/adblock/AdBlockEngine.kt",
@@ -184,11 +184,15 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/BrowserController.kt",
-      "sha256": "99452d0f477c818d8307e6f7d5be430862c980d721d47b6002dd0f28d5ea77ad"
+      "sha256": "8c36f977b8b6d375b7050ac8dcc7c5d8252947cfc6af66a0e7dc9555c1fab3bb"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/DownloadHelper.kt",
-      "sha256": "e0db366d1e917830dfbfd285730bee77b5d6f27e5fc055855512edc309a70f27"
+      "sha256": "a99e2667e7f7bb294fcfd8a0a44900e56f6b4df8b0da229ba2b508f20feb5fc6"
+    },
+    {
+      "path": "app/src/main/java/com/shifuf/prism/core/DownloadHttp.kt",
+      "sha256": "205da8900aa2adbc9624598147e1a82b75650d15c0a7c4b3e90c2fa6ec07bcba"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/DownloadNotifier.kt",
@@ -196,7 +200,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/ExternalPlayerHelper.kt",
-      "sha256": "fb3be992931253cb6b1e0014275ca4d31ee598eba3658bbcfd8425e4ebb030dc"
+      "sha256": "5ded4730575dcff3ce88d3c07738bc98b6180b5318ebed6f64021f3aba689f5b"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/FaviconCache.kt",
@@ -227,6 +231,14 @@
       "sha256": "b2db9bb3feaf82e93465dfb7b8e7b3c7abc466b83c2cd904604dd378e5499f4a"
     },
     {
+      "path": "app/src/main/java/com/shifuf/prism/core/PageLoadStatus.kt",
+      "sha256": "e677c39b8169f5b5799a7808b187a46efe1de27686042c0936ce0ab666a55d16"
+    },
+    {
+      "path": "app/src/main/java/com/shifuf/prism/core/PageNavigationStatus.kt",
+      "sha256": "809b07e7a2e41225068591437d9cc797f02b167fb31920900e8d0afaba6fcb39"
+    },
+    {
       "path": "app/src/main/java/com/shifuf/prism/core/PreferenceStore.kt",
       "sha256": "a9a508813dcb53eedfeb3fc07da464676177cc9efaf39ae4407208679f5fcf38"
     },
@@ -236,7 +248,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/ResourceSniffer.kt",
-      "sha256": "425f33840dd83cd10a7bcc942c49db0e46e524586fa3476131397e46cd249920"
+      "sha256": "5dc8e6ed87dc36531d298ee51586d8e72556eff902d3a88ad251ed0702b4ca8e"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/SearchSuggestions.kt",
@@ -248,7 +260,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/TabManager.kt",
-      "sha256": "1aa5400b402dacf9ff0c10fd233bbcad8d6f38d41917889481f6b7e63ce37ef9"
+      "sha256": "7974462039fd43f5ceabf03c0f2452b6068d773331a9510b035058fefbe73bea"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/core/UserAgentHelper.kt",
@@ -388,7 +400,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/DownloadsActivity.kt",
-      "sha256": "a3ba81df4715697ce7976ee34d009b7ae828d88f450229ccda96218fca4a57a8"
+      "sha256": "1c166c46fdd65707239222301bc6762aaee7bf9a8ba3ce086636ed0d6591b4f1"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/EdgeSwipeGesture.kt",
@@ -424,7 +436,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/SettingsActivity.kt",
-      "sha256": "8998358f13f7b3be4fd004c52c8be84857bf10c3fa4dce49de6261e4ad18d076"
+      "sha256": "282b6d4eb2bdd0388e88874f9e58a36179aba0bb3e43c9e6b605fd2b68d7f687"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/SheetMotion.kt",
@@ -432,7 +444,7 @@
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/SnifferActivity.kt",
-      "sha256": "08e00f93675a85077068cf9610b3a8c236df271f3b975f0efe9729a4ceaf43cd"
+      "sha256": "50323c8601b21294f588ddde2f831f6c53c09e545ac81e38855ab7dae0d73b5c"
     },
     {
       "path": "app/src/main/java/com/shifuf/prism/ui/TabListAdapter.kt",
@@ -675,6 +687,22 @@
       "sha256": "6c4cd5efa2da5acb2c17f9a7612e1224518e9f619190e1a704bdb89b2bd46c21"
     },
     {
+      "path": "app/src/main/res/drawable/ic_status_dot.xml",
+      "sha256": "e4be98dd299ce88f9e42cc8d023cc369fe8c0132d8c0189a5f2e6be593ef8874"
+    },
+    {
+      "path": "app/src/main/res/drawable/ic_status_error.xml",
+      "sha256": "22571623efefcf70cfdcf66691bbd590f9e4645d184c2d4c0629bd14fffb82fe"
+    },
+    {
+      "path": "app/src/main/res/drawable/ic_status_safe.xml",
+      "sha256": "1af3768d8cc9969db01e746b1e2b9e42457e9eb83e426e3a795ce3d81f774796"
+    },
+    {
+      "path": "app/src/main/res/drawable/ic_status_warning.xml",
+      "sha256": "5bdcff9d1b7ddc1edefd70c793344abbcd56e99c8b21b779e2bdb46cfec7e876"
+    },
+    {
       "path": "app/src/main/res/drawable/ic_tabs.xml",
       "sha256": "96b92c59f3a4cb1b22e8f9c51859c29e56e65b0b7148da9a0f9ae9c0f43f5994"
     },
@@ -704,7 +732,7 @@
     },
     {
       "path": "app/src/main/res/layout/activity_main.xml",
-      "sha256": "b5e8a8ea7437bf3e938d2ff460551e03f05b7f4bbdb346b852446fba8b61c395"
+      "sha256": "867879fff65f10887083448c24a141f29f9e9ad69ac6ee2d7a676d6fcacbb8b9"
     },
     {
       "path": "app/src/main/res/layout/activity_message_center.xml",
@@ -820,7 +848,7 @@
     },
     {
       "path": "app/src/main/res/values-night/colors.xml",
-      "sha256": "77de9bc7ee43bcc8e181979c7ba4828143f7d6f6dbe7ed9120df115dad7e8958"
+      "sha256": "18ae014857105c086f2e9e83d9ec05127d2588c581ab1b084688f9aa1dbd469a"
     },
     {
       "path": "app/src/main/res/values-night/themes.xml",
@@ -828,7 +856,7 @@
     },
     {
       "path": "app/src/main/res/values/colors.xml",
-      "sha256": "6bda35792af01162410e2b950fee6b9b5731d7efc4574041b51c9a44cea0c6f3"
+      "sha256": "89af52ae1f6a13228937efada35fe22cb4dc75552700bd58c9da803f22beff05"
     },
     {
       "path": "app/src/main/res/values/message_styles.xml",
@@ -840,7 +868,7 @@
     },
     {
       "path": "app/src/main/res/values/strings.xml",
-      "sha256": "d9be54a03a03e9b2f32f460fd434c0fc61c711d51ae831d759fbd2162a5d1e86"
+      "sha256": "25ca74b8112c484b2747385b656826618e9197402ac26bb205fbd9598fa537c6"
     },
     {
       "path": "app/src/main/res/values/themes.xml",
@@ -855,12 +883,28 @@
       "sha256": "83516f703eac4ca4ad63bb9cf5013eb8820b2ccfe727d09907c6188c25790350"
     },
     {
+      "path": "app/src/test/java/com/shifuf/prism/core/DownloadHttpTest.kt",
+      "sha256": "f6171ebb5a8e72585e58e6fb050442ba704d3e4750f37039e53113999669b9cb"
+    },
+    {
       "path": "app/src/test/java/com/shifuf/prism/core/InternalPageTest.kt",
       "sha256": "bb3b735f6b0c1b1dc15aec6ecedb46d0116c14183eb53be3589134310f45b06d"
     },
     {
       "path": "app/src/test/java/com/shifuf/prism/core/NavigationInputTest.kt",
       "sha256": "c014c490d2c1d993a470ab0bb19aafa3daa86721d90f11019c541bb78773c780"
+    },
+    {
+      "path": "app/src/test/java/com/shifuf/prism/core/PageLoadStatusTest.kt",
+      "sha256": "2c3931e92e3e0200d1e15163685f593d656faa19a3df8541101796834065f1c5"
+    },
+    {
+      "path": "app/src/test/java/com/shifuf/prism/core/PageNavigationStatusTest.kt",
+      "sha256": "b39d65fcf7136f4ac5af76ad8763fd33f7a407efa992425f079219d7baba8f4f"
+    },
+    {
+      "path": "app/src/test/java/com/shifuf/prism/core/ResourceSnifferTest.kt",
+      "sha256": "8f35d8c1d98f339db7d9c080213b867ec6cde73ca0134c2cea8671343fcdcb49"
     },
     {
       "path": "app/src/test/java/com/shifuf/prism/core/SearchSuggestionsTest.kt",
@@ -917,6 +961,18 @@
     {
       "path": "build.gradle.kts",
       "sha256": "b3c322888b74d6eaae7198df2bcc903f591bac235a3a8d2f1aa0269b0de5ad3d"
+    },
+    {
+      "path": "docs/browser-runtime-qa.md",
+      "sha256": "9e3d0b92eb2eb8bee889711f83cb8f868c55351aeaff9222b12bbe8e65f69c16"
+    },
+    {
+      "path": "docs/continuous-development.md",
+      "sha256": "8405935174eae5af45dcbacfea2d034c5173a8073c81694f48f7f9c5747b6e0b"
+    },
+    {
+      "path": "docs/superpowers/specs/2026-11-21-webpage-status-indicator-design.md",
+      "sha256": "d501454d8dd3cff885c90ee5a183a6ca760a1e0f808a6ccbdaea96a0cf181b73"
     },
     {
       "path": "gradle.properties",
@@ -1029,6 +1085,10 @@
     {
       "path": "third_party/jpush/jiguang_sdk/jiguang/src/main/res/xml/jpush_file_paths.xml",
       "sha256": "8d77ba6fcd75e2d15d705ec4a7ebfbc8368869878dd5052771d3e1b27af0c378"
+    },
+    {
+      "path": "tools/browser-qa-fixtures.py",
+      "sha256": "07454504a2f5a6e88174617ce30ec4fa4763b7a2509405e0b36b6b9b600b4430"
     }
   ]
 }

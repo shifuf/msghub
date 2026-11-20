@@ -12,13 +12,12 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.shifuf.prism.BrowserApp
 import com.shifuf.prism.MainActivity
 import com.shifuf.prism.R
+import com.shifuf.prism.core.DownloadBackend
 import com.shifuf.prism.core.DownloadHelper
 import com.shifuf.prism.core.ExternalPlayerHelper
 import com.shifuf.prism.core.SniffedResource
@@ -30,6 +29,7 @@ import java.util.Locale
 class SnifferActivity : PrismActivity() {
     private val sniffer get() = BrowserApp.instance.sniffer
     private val prefs get() = BrowserApp.instance.prefs
+    private val scopeId get() = intent?.getStringExtra(EXTRA_TAB_ID)
     private lateinit var recycler: RecyclerView
     private lateinit var emptyView: TextView
     private lateinit var adapter: Adapter
@@ -48,7 +48,6 @@ class SnifferActivity : PrismActivity() {
 
         recycler = findViewById(R.id.recycler)
         emptyView = findViewById(R.id.emptyView)
-        emptyView.text = "尚未嗅探到视频资源。播放网页视频后会自动出现在这里。"
         adapter = Adapter(
             df = df,
             onClick = { showActions(it) },
@@ -66,21 +65,28 @@ class SnifferActivity : PrismActivity() {
     }
 
     private fun refresh() {
-        val page = intent?.getStringExtra(EXTRA_PAGE_URL)
-            ?: BrowserApp.instance.prefs.lastUrl
-        val list = sniffer.snapshot(page).filter { UiSearch.matches(searchQuery, it.url, it.typeLabel, it.mimeHint) }
-        setPageSummary("${list.size} 个视频资源 · 点按播放或下载")
+        val page = inspectedPage()
+        val list = sniffer.snapshot(page, scopeId).filter { UiSearch.matches(searchQuery, it.url, it.typeLabel, it.mimeHint) }
+        setPageSummary("${list.size} 个音视频资源 · 点按播放或下载")
         adapter.submit(list)
-        emptyView.text = if (searchQuery.isNotBlank()) "未找到匹配的视频资源" else if (page.isBlank() || page.startsWith("about:")) {
-            "请先打开网页并播放视频"
+        emptyView.text = if (searchQuery.isNotBlank()) "未找到匹配的音视频资源" else if (page.isBlank() || page.startsWith("about:")) {
+            "请先打开网页并播放音频或视频"
         } else {
-            "当前页尚未嗅探到视频\n$page"
+            "当前页尚未嗅探到音视频资源\n$page"
         }
         emptyView.visibility = if (list.isEmpty()) View.VISIBLE else View.GONE
         recycler.visibility = if (list.isEmpty()) View.GONE else View.VISIBLE
     }
 
+    private fun inspectedPage(): String = sniffer.pageUrl(scopeId)
+
+    private fun clearResults() {
+        sniffer.clear(scopeId, inspectedPage())
+        refresh()
+    }
+
     private fun showActions(item: SniffedResource) {
+        if (!checkResource(item)) return
         val options = arrayOf(
             "通过应用播放…",
             "下载",
@@ -92,26 +98,32 @@ class SnifferActivity : PrismActivity() {
         DialogUi.material(this)
             .setTitle(item.typeLabel.uppercase(Locale.getDefault()))
             .setItems(options) { _, which ->
+                if (!checkResource(item)) return@setItems
                 when (which) {
-                    0 -> playExternal(item.url)
+                    0 -> playExternal(item)
                     1 -> download(item)
                     2 -> openInNewTab(item.url)
                     3 -> copy(item.url)
                     4 -> share(item.url)
-                    5 -> {
-                        sniffer.clear()
-                        refresh()
-                    }
+                    5 -> clearResults()
                 }
             }
             .show()
     }
 
-    private fun playExternal(url: String) {
+    private fun checkResource(item: SniffedResource): Boolean {
+        if (sniffer.isCurrent(item, scopeId)) return true
+        refresh()
+        Toast.makeText(this, "网页已变化，请重新选择资源", Toast.LENGTH_SHORT).show()
+        return false
+    }
+
+    private fun playExternal(item: SniffedResource) {
         ExternalPlayerHelper.playWithChooser(
             context = this,
-            url = url,
-            rememberedPackage = prefs.preferredPlayerPackage
+            url = item.url,
+            rememberedPackage = prefs.preferredPlayerPackage,
+            audioMimeType = item.audioMimeType,
         ) { chosen ->
             prefs.preferredPlayerPackage = chosen?.packageName.orEmpty()
             if (chosen == null) {
@@ -123,31 +135,34 @@ class SnifferActivity : PrismActivity() {
     }
 
     private fun download(item: SniffedResource) {
-        val mime = when (item.typeLabel) {
+        val mime = item.audioMimeType ?: when (item.typeLabel) {
             "m3u8" -> "application/x-mpegURL"
             "mpd" -> "application/dash+xml"
             "webm" -> "video/webm"
             else -> "video/mp4"
         }
-        val engine = if (BrowserApp.instance.prefs.downloadUseSystem) "系统" else "内置"
+        val pageUrl = item.pageUrl
+        val backend = if (prefs.downloadUseSystem) DownloadBackend.SYSTEM else DownloadBackend.BUILTIN
         DownloadHelper.resolveFileName(
             url = item.url,
             mimeType = mime,
-            pageUrl = item.pageUrl,
+            pageUrl = pageUrl,
         ) { name ->
             runOnUiThread {
+                if (isFinishing || isDestroyed || !checkResource(item)) return@runOnUiThread
+                val resolved = DownloadHelper.resolveBackend(item.url, pageUrl, backend)
                 DialogUi.showDownloadConfirm(
                     context = this,
                     fileName = name,
                     url = item.url,
-                    engineLabel = engine,
+                    engineLabel = if (resolved == DownloadBackend.SYSTEM) "系统" else "内置",
                     onConfirm = { chosen ->
-                        runCatching {
-                            DownloadHelper.enqueue(
-                                context = this,
+                        if (checkResource(item)) runCatching {
+                            BrowserApp.instance.downloads.enqueue(
                                 url = item.url,
                                 mimeType = mime,
-                                pageUrl = item.pageUrl,
+                                pageUrl = pageUrl,
+                                backend = backend,
                                 preferredName = chosen
                             )
                         }.onFailure {
@@ -170,7 +185,7 @@ class SnifferActivity : PrismActivity() {
 
     private fun copy(text: String) {
         val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("video", text))
+        cm.setPrimaryClip(ClipData.newPlainText("资源链接", text))
         Toast.makeText(this, "已复制", Toast.LENGTH_SHORT).show()
     }
 
@@ -181,7 +196,7 @@ class SnifferActivity : PrismActivity() {
                     type = "text/plain"
                     putExtra(Intent.EXTRA_TEXT, url)
                 },
-                "分享视频链接"
+                "分享资源链接"
             )
         )
     }
@@ -195,7 +210,7 @@ class SnifferActivity : PrismActivity() {
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             1 -> {
-                sniffer.clear(); refresh(); true
+                clearResults(); true
             }
             2 -> {
                 prefs.preferredPlayerPackage = ""
@@ -240,6 +255,6 @@ class SnifferActivity : PrismActivity() {
     }
 
     companion object {
-        const val EXTRA_PAGE_URL = "page_url"
+        const val EXTRA_TAB_ID = "tab_id"
     }
 }

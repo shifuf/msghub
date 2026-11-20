@@ -302,7 +302,10 @@ class SettingsActivity : PrismActivity() {
             30 -> toggleAdblock(!app.prefs.adBlockEnabled)
             31 -> startActivity(Intent(this, FilterRulesActivity::class.java))
             32 -> startActivity(Intent(this, ScriptsActivity::class.java))
-            40 -> startActivity(Intent(this, SnifferActivity::class.java))
+            40 -> startActivity(
+                Intent(this, SnifferActivity::class.java)
+                    .putExtra(SnifferActivity.EXTRA_TAB_ID, intent.getStringExtra(SnifferActivity.EXTRA_TAB_ID))
+            )
             41 -> startActivity(Intent(this, NetworkLogActivity::class.java))
             42 -> toggleDebug(!app.debugServer.isRunning)
             60 -> clearBrowsingData()

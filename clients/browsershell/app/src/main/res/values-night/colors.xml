@@ -20,6 +20,8 @@
     <color name="via_card">#FF1C1C1E</color>
     <color name="via_menu_icon_bg">#FF2C2C2E</color>
     <color name="via_danger">#FFFF6961</color>
+    <color name="via_success">#FF43D77A</color>
+    <color name="via_warning">#FFFFB547</color>
     <color name="via_input_text">#FFF9FAFB</color>
     <color name="via_input_hint">#FF9CA3AF</color>
     <color name="via_input_bg">#FF2C2C2E</color>

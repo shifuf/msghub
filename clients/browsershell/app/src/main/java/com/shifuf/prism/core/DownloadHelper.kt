@@ -20,7 +20,7 @@ import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
-enum class DownloadBackend { SYSTEM, BUILTIN }
+private val downloadHttp = DownloadHttp(lookupCookie = { CookieManager.getInstance().getCookie(it) })
 
 data class DownloadItem(
     val id: Long,
@@ -36,7 +36,8 @@ data class DownloadItem(
     val backend: String = "builtin",
     val error: String = "",
     val userAgent: String = "",
-    val saveDir: String = ""
+    val saveDir: String = "",
+    val restartOnResume: Boolean = false
 ) {
     val progress: Int
         get() = if (totalBytes > 0) ((bytesDownloaded * 100) / totalBytes).toInt().coerceIn(0, 100) else -1
@@ -125,10 +126,12 @@ class DownloadRepository(private val context: Context) {
     ): Long {
         val guessed = preferredName?.takeIf { it.isNotBlank() }
             ?: URLUtil.guessFileName(url, contentDisposition, mimeType)
-        return if (backend == DownloadBackend.SYSTEM) {
-            enqueueSystem(url, guessed, userAgent, mimeType, pageUrl)
-        } else {
-            enqueueBuiltin(url, guessed, userAgent, mimeType, pageUrl)
+        return when (DownloadHelper.resolveBackend(url, pageUrl, backend)) {
+            DownloadBackend.SYSTEM -> enqueueSystem(url, guessed, userAgent, mimeType, pageUrl)
+            DownloadBackend.BUILTIN -> enqueueBuiltin(
+                url, guessed, userAgent, mimeType, pageUrl,
+                restartOnResume = backend == DownloadBackend.SYSTEM
+            )
         }
     }
 
@@ -148,8 +151,6 @@ class DownloadRepository(private val context: Context) {
             setAllowedOverRoaming(true)
             setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Prism/$safe")
             userAgent?.takeIf { it.isNotBlank() }?.let { addRequestHeader("User-Agent", it) }
-            val cookie = cookieOf(url, pageUrl)
-            if (!cookie.isNullOrBlank()) addRequestHeader("Cookie", cookie)
             if (!pageUrl.isNullOrBlank()) addRequestHeader("Referer", pageUrl)
             val mime = mimeType?.takeIf { it.isNotBlank() && !it.contains('*') }
             if (mime != null) setMimeType(mime)
@@ -179,7 +180,8 @@ class DownloadRepository(private val context: Context) {
         name: String,
         userAgent: String?,
         mimeType: String?,
-        pageUrl: String?
+        pageUrl: String?,
+        restartOnResume: Boolean
     ): Long {
         val id = seq.incrementAndGet()
         val safeName = name.replace(Regex("""[\\/:*?"<>|]"""), "_")
@@ -195,7 +197,8 @@ class DownloadRepository(private val context: Context) {
             status = DownloadItem.STATUS_PENDING,
             backend = "builtin",
             userAgent = userAgent.orEmpty(),
-            saveDir = dir.absolutePath
+            saveDir = dir.absolutePath,
+            restartOnResume = restartOnResume
         )
         items[id] = item
         persistMeta()
@@ -228,7 +231,7 @@ class DownloadRepository(private val context: Context) {
         dir.mkdirs()
         val target = File(dir, item.fileName)
         startBuiltin(id, target)
-        toast("继续下载")
+        toast(if (item.restartOnResume) "重新下载" else "继续下载")
     }
 
     fun rename(id: Long, newNameRaw: String): Boolean {
@@ -265,34 +268,26 @@ class DownloadRepository(private val context: Context) {
         val item = items[id] ?: return
         var conn: HttpURLConnection? = null
         try {
-            val existing = if (target.exists()) target.length() else 0L
-            conn = (URL(item.url).openConnection() as HttpURLConnection).apply {
-                connectTimeout = 20000
-                readTimeout = 60000
-                instanceFollowRedirects = true
-                setRequestProperty(
-                    "User-Agent",
-                    item.userAgent.ifBlank {
-                        "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
-                    }
-                )
-                val cookie = cookieOf(item.url, item.pageUrl)
-                if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
-                if (item.pageUrl.isNotBlank()) setRequestProperty("Referer", item.pageUrl)
-                if (existing > 0) setRequestProperty("Range", "bytes=$existing-")
-            }
+            val download = downloadHttp.openDownload(
+                item.url,
+                item.userAgent,
+                item.pageUrl,
+                existingBytes = target.length(),
+                restartOnResume = item.restartOnResume
+            )
+            conn = download.connection
+            val offset = download.appendOffset
             val code = conn.responseCode
-            if (code !in 200..299 && code != 206) error("HTTP $code")
+            if (code !in 200..299) error("HTTP $code")
             val totalFromHeader = conn.getHeaderField("Content-Range")?.substringAfter("/")?.toLongOrNull()
-                ?: if (code == 206) existing + conn.contentLengthLong.coerceAtLeast(0)
+                ?: if (code == 206) offset + conn.contentLengthLong.coerceAtLeast(0)
                 else conn.contentLengthLong
             val total = if (totalFromHeader > 0) totalFromHeader else -1L
-            val append = code == 206 && existing > 0
             conn.inputStream.use { input ->
                 RandomAccessFile(target, "rw").use { raf ->
-                    if (append) raf.seek(existing) else raf.setLength(0)
+                    if (offset > 0) raf.seek(offset) else raf.setLength(0)
                     val buf = ByteArray(64 * 1024)
-                    var done = if (append) existing else 0L
+                    var done = offset
                     var lastUi = 0L
                     while (true) {
                         if (pauseFlags[id]?.get() == true || Thread.currentThread().isInterrupted) {
@@ -461,11 +456,6 @@ class DownloadRepository(private val context: Context) {
         return f
     }
 
-    private fun cookieOf(url: String, pageUrl: String?): String? = runCatching {
-        val cm = CookieManager.getInstance()
-        cm.getCookie(url) ?: pageUrl?.let { cm.getCookie(it) }
-    }.getOrNull()
-
     private fun guessMime(name: String): String {
         val n = name.lowercase()
         return when {
@@ -505,7 +495,8 @@ class DownloadRepository(private val context: Context) {
                     backend = o.optString("backend", "builtin"),
                     error = o.optString("error"),
                     userAgent = o.optString("userAgent"),
-                    saveDir = o.optString("saveDir")
+                    saveDir = o.optString("saveDir"),
+                    restartOnResume = o.optBoolean("restartOnResume")
                 )
             }
         }
@@ -531,6 +522,7 @@ class DownloadRepository(private val context: Context) {
                     .put("error", d.error)
                     .put("userAgent", d.userAgent)
                     .put("saveDir", d.saveDir)
+                    .put("restartOnResume", d.restartOnResume)
             )
         }
         runCatching { metaFile.writeText(arr.toString()) }
@@ -542,6 +534,9 @@ object DownloadHelper {
         Thread(r, "prism-dl-name").apply { isDaemon = true }
     }
     private val main = Handler(Looper.getMainLooper())
+
+    fun resolveBackend(url: String, pageUrl: String?, preferredBackend: DownloadBackend): DownloadBackend =
+        downloadHttp.resolveBackend(url, pageUrl, preferredBackend)
 
     fun enqueue(
         context: Context,
@@ -620,23 +615,7 @@ object DownloadHelper {
         var current = url
         var redirects = 0
         while (redirects < 8) {
-            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 12_000
-                readTimeout = 12_000
-                requestMethod = "HEAD"
-                setRequestProperty(
-                    "User-Agent",
-                    userAgent?.takeIf { it.isNotBlank() }
-                        ?: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
-                )
-                if (!pageUrl.isNullOrBlank()) setRequestProperty("Referer", pageUrl)
-                runCatching {
-                    val cookie = CookieManager.getInstance().getCookie(current)
-                        ?: pageUrl?.let { CookieManager.getInstance().getCookie(it) }
-                    if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
-                }
-            }
+            val conn = downloadHttp.open(current, userAgent, pageUrl, method = "HEAD")
             val code = try {
                 conn.responseCode
             } catch (_: Exception) {
@@ -646,10 +625,9 @@ object DownloadHelper {
             }
             when (code) {
                 in 300..399 -> {
-                    val loc = conn.getHeaderField("Location")
+                    val next = downloadHttp.resolveRedirect(conn.url, conn.getHeaderField("Location"))
                     conn.disconnect()
-                    if (loc.isNullOrBlank()) return null
-                    current = resolveRedirect(current, loc)
+                    current = next ?: return null
                     redirects++
                 }
                 in 200..299 -> {
@@ -685,24 +663,7 @@ object DownloadHelper {
         var current = url
         var redirects = 0
         while (redirects < 8) {
-            val conn = (URL(current).openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = false
-                connectTimeout = 12_000
-                readTimeout = 12_000
-                requestMethod = "GET"
-                setRequestProperty("Range", "bytes=0-0")
-                setRequestProperty(
-                    "User-Agent",
-                    userAgent?.takeIf { it.isNotBlank() }
-                        ?: "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/131.0.0.0 Mobile Safari/537.36"
-                )
-                if (!pageUrl.isNullOrBlank()) setRequestProperty("Referer", pageUrl)
-                runCatching {
-                    val cookie = CookieManager.getInstance().getCookie(current)
-                        ?: pageUrl?.let { CookieManager.getInstance().getCookie(it) }
-                    if (!cookie.isNullOrBlank()) setRequestProperty("Cookie", cookie)
-                }
-            }
+            val conn = downloadHttp.open(current, userAgent, pageUrl, range = "bytes=0-0")
             val code = try {
                 conn.responseCode
             } catch (_: Exception) {
@@ -711,10 +672,9 @@ object DownloadHelper {
             }
             when (code) {
                 in 300..399 -> {
-                    val loc = conn.getHeaderField("Location")
+                    val next = downloadHttp.resolveRedirect(conn.url, conn.getHeaderField("Location"))
                     conn.disconnect()
-                    if (loc.isNullOrBlank()) return null
-                    current = resolveRedirect(current, loc)
+                    current = next ?: return null
                     redirects++
                 }
                 in 200..299, 206 -> {
@@ -734,14 +694,6 @@ object DownloadHelper {
             }
         }
         return null
-    }
-
-    private fun resolveRedirect(base: String, location: String): String {
-        return try {
-            URL(URL(base), location).toString()
-        } catch (_: Exception) {
-            location
-        }
     }
 
     fun parseContentDisposition(header: String?): String? {

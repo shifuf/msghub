@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
+import com.shifuf.prism.BrowserApp
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -17,7 +18,8 @@ data class TabInfo(
     val id: String,
     var title: String,
     var url: String,
-    var isActive: Boolean
+    var isActive: Boolean,
+    var loadStatus: PageLoadIndicator = PageLoadIndicator()
 )
 
 /**
@@ -37,7 +39,8 @@ class TabManager(
         val controller: BrowserController,
         var title: String = "新标签页",
         var url: String = "about:blank",
-        var favicon: Bitmap? = null
+        var favicon: Bitmap? = null,
+        var loadStatus: PageLoadIndicator = PageLoadIndicator()
     )
 
     private val tabs = linkedMapOf<String, Tab>()
@@ -47,6 +50,7 @@ class TabManager(
     private val persistRunnable = Runnable { persistSessionNow() }
     private val chromeRunnable = Runnable { onTabsChanged() }
     private val thumbnails = ConcurrentHashMap<String, Bitmap>()
+    private val sniffer get() = BrowserApp.instance.sniffer
 
     val activeController: BrowserController?
         get() = activeId?.let { tabs[it]?.controller }
@@ -57,7 +61,7 @@ class TabManager(
     fun tabCount(): Int = tabs.size
 
     fun snapshot(): List<TabInfo> = tabs.values.map {
-        TabInfo(it.id, it.title, it.url, it.id == activeId)
+        TabInfo(it.id, it.title, it.url, it.id == activeId, it.loadStatus)
     }
 
     fun faviconOf(id: String): Bitmap? = tabs[id]?.favicon
@@ -138,6 +142,12 @@ class TabManager(
                 if (id == activeId) callbacks.onStatus(text)
             }
 
+            override fun onPageStatusChanged(status: PageLoadIndicator) {
+                tabs[id]?.loadStatus = status
+                if (id == activeId) callbacks.onPageStatusChanged(status)
+                scheduleChrome()
+            }
+
             override fun onIconChanged(icon: Bitmap?) {
                 if (icon == null || icon.isRecycled) return
                 val scaled = runCatching {
@@ -160,7 +170,7 @@ class TabManager(
                 if (id == activeId) callbacks.onScrollChanged(scrollY)
             }
         }
-        val controller = BrowserController(webView, tabCallbacks)
+        val controller = BrowserController(webView, tabCallbacks, id)
         val tab = Tab(id, webView, controller, title = initialTitle.ifBlank { "新标签页" })
         tabs[id] = tab
         container.addView(
@@ -189,6 +199,7 @@ class TabManager(
         if (!tabs.containsKey(id)) return
         if (activeId != null && activeId != id) captureActiveThumbnail()
         activeId = id
+        sniffer.activate(id)
         tabs.values.forEach { t ->
             val active = t.id == id
             t.webView.visibility = if (active) View.VISIBLE else View.GONE
@@ -199,6 +210,7 @@ class TabManager(
         callbacks.onTitleChanged(active.title)
         callbacks.onProgress(active.webView.progress)
         callbacks.onScrollChanged(active.webView.scrollY)
+        callbacks.onPageStatusChanged(active.loadStatus)
         runCatching {
             val night = com.shifuf.prism.BrowserApp.instance.prefs.nightMode
             active.controller.applyNightMode(night)
@@ -229,6 +241,7 @@ class TabManager(
             tab.webView.onPause()
             tab.webView.destroy()
         }
+        sniffer.forget(id)
         if (tabs.isEmpty()) {
             activeId = null
             open(PreferenceStore.HOME_URL, switchTo = true)
@@ -323,6 +336,7 @@ class TabManager(
                 tab.webView.onPause()
                 tab.webView.destroy()
             }
+            sniffer.forget(id)
         }
         thumbnails.values.forEach { if (!it.isRecycled) it.recycle() }
         thumbnails.clear()

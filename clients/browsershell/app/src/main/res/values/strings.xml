@@ -1,6 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools" tools:locale="zh">
     <string name="app_name">棱镜</string>
+    <string name="page_status_loading">正在加载网页</string>
+    <string name="page_status_secure">主页面使用 HTTPS，点击查看连接状态</string>
+    <string name="page_status_insecure">HTTP 未加密，点击查看连接风险</string>
+    <string name="page_status_network_error">网页连接失败，点击查看详情</string>
+    <string name="page_status_certificate_error">网页证书校验失败，点击查看详情</string>
+    <string name="page_status_http_client_error">网页返回 HTTP %1$d，点击查看详情</string>
+    <string name="page_status_http_server_error">网页服务器返回 HTTP %1$d，点击查看详情</string>
+    <string name="page_status_dialog_title">网页连接状态</string>
     <string name="scripts_title">用户脚本</string>
     <string name="sniffer_title">资源嗅探</string>
     <string name="network_title">网络日志</string>
