@@ -10,7 +10,7 @@
 - 会话收件箱支持回复幂等、失败及不确定送达状态、分页、关闭/重开，以及 SSE 重连和 HTTP 补查；清理记录时保护活跃会话及尚未确定送达的回复。
 - 定时任务增加时区与执行历史。确定失败的周期任务可继续后续周期；不确定送达不自动重发。
 - 运维页面显示构建提交、迁移、服务就绪状态与备份任务。独立 runner 加密备份 PostgreSQL、Redis 和部署配置，并在自身临时数据库真实恢复验证。API 不能写归档，也不挂载备份私钥或 Docker socket。
-- 真实镜像验证发现并修复了 PostgreSQL socket 路径超长、Redis 尚未加载 RDB 就进行校验、数据库部分启动后遗漏停止，以及忽略进程停止失败仍标记通过的问题。
+- 真实镜像验证发现并修复了 PostgreSQL socket 路径超长、Redis 尚未加载 RDB 就进行校验、数据库部分启动后遗漏停止，以及忽略进程停止失败仍标记通过的问题。生产验收还复现并修复了无密码 Redis 被传入空 AUTH 导致快照失败的环境差异，并补上有认证和无认证两种真实镜像场景。
 - BrowserShell 2.2.3/code36 提前初始化极光，增加设备关联及权限入口、AndroidKeyStore 加密凭据、持久化回执重试与网络恢复。只有观察到系统中对应的活动通知 ID 才报告“已显示”，并尊重应用暂停推送的选择。
 
 ## 已执行验证
@@ -19,12 +19,12 @@
 | --- | --- |
 | `pnpm check` | lint、类型检查、API/Web 构建通过；API/脚本 126 通过、25 项集成检查因未注入环境跳过；Web 29 通过 |
 | 隔离 PostgreSQL/Redis 集成检查 | 32 通过、0 跳过、0 失败，使用真实编译后的 AppModule，覆盖迁移、鉴权、设备、会话、清理、Redis 与就绪状态 |
-| 最后发送链路与备份回归 | 19 通过、0 跳过、0 失败，包含本轮新增的 3 项备份故障回归 |
-| Linux 真实备份镜像 | 加密归档、PostgreSQL/Redis 真实恢复、迁移读取、临时进程与文件清理、测试源数据保留、API 归档只读挂载全部通过 |
+| 最后发送链路与备份回归 | 21 通过、0 跳过、0 失败，包含本轮新增的 5 项备份故障回归 |
+| Linux 真实备份镜像 | 有认证和无认证 Redis 两种场景均通过；加密归档、PostgreSQL/Redis 真实恢复、迁移读取、临时进程与文件清理、测试源数据保留、API 归档只读挂载全部通过 |
 | Android | 54 项测试通过，debug/release 构建通过，lint 0 错误、365 警告；APK 原签名验证通过 |
 | 源码同步 | 257 个 Android 源文件、构建文件及依赖逐项散列核对；不包含签名私钥、本地凭据、日志、APK 或构建缓存 |
 
-真实镜像验证使用随机命名的私有网络、临时数据库与测试凭据，没有恢复或修改生产数据库，也没有向业务手机发送验证消息。完整集成检查日志保存在本地 `data/deploy/notify-integration.log`，基础检查在 `data/deploy/notify-check.log`；真实备份镜像记录在服务器项目内 `data/deploy/notify-backup-image-smoke-v5.log`。
+真实镜像验证使用随机命名的私有网络、临时数据库与测试凭据，没有恢复或修改生产数据库，也没有向业务手机发送验证消息。完整集成检查日志保存在本地 `data/deploy/notify-integration.log`，基础检查在 `data/deploy/notify-check.log`；真实备份镜像记录在服务器项目内 `data/deploy/notify-backup-image-smoke-v5.log` 及 `data/deploy/notify-backup-image-smoke-v6.log`。
 
 ## 安装与关联
 

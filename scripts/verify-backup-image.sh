@@ -4,6 +4,11 @@ set -eu
 umask 077
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 project_root=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd -P)
+redis_auth=true
+if [ "$#" -gt 0 ]; then
+  [ "$#" -eq 1 ] && [ "$1" = --no-redis-auth ] || { printf '%s\n' SMOKE_ARGUMENT_INVALID >&2; exit 1; }
+  redis_auth=false
+fi
 command -v docker >/dev/null 2>&1 || { printf '%s\n' DOCKER_REQUIRED >&2; exit 1; }
 command -v openssl >/dev/null 2>&1 || { printf '%s\n' OPENSSL_REQUIRED >&2; exit 1; }
 docker info >/dev/null 2>&1 || { printf '%s\n' DOCKER_UNAVAILABLE >&2; exit 1; }
@@ -59,14 +64,23 @@ docker network create --internal --label "msghub.backup-smoke=$token" "$network"
 network_created=true
 pg_password=$(openssl rand -hex 24)
 redis_password=$(openssl rand -hex 24)
+smoke_redis_cli() {
+  if [ "$redis_auth" = true ]; then
+    docker exec -e "REDISCLI_AUTH=$redis_password" "$redis" redis-cli "$@"
+  else
+    docker exec "$redis" redis-cli "$@"
+  fi
+}
 docker run -d --name "$postgres" --label "msghub.backup-smoke=$token" --network "$network" --tmpfs /var/lib/postgresql/data:rw,nosuid,size=256m \
   -e POSTGRES_USER=msg -e "POSTGRES_PASSWORD=$pg_password" -e POSTGRES_DB=msg_notify postgres:16-alpine >/dev/null
 postgres_created=true
+set -- redis-server --save '' --appendonly no
+if [ "$redis_auth" = true ]; then set -- "$@" --requirepass "$redis_password"; fi
 docker run -d --name "$redis" --label "msghub.backup-smoke=$token" --network "$network" --tmpfs /data:rw,nosuid,size=64m \
-  redis:7-alpine redis-server --save '' --appendonly no --requirepass "$redis_password" >/dev/null
+  redis:7-alpine "$@" >/dev/null
 redis_created=true
 attempt=0
-until docker exec "$postgres" pg_isready -h 127.0.0.1 -U msg -d msg_notify >/dev/null 2>&1 && docker exec -e "REDISCLI_AUTH=$redis_password" "$redis" redis-cli ping 2>/dev/null | grep -qx PONG; do
+until docker exec "$postgres" pg_isready -h 127.0.0.1 -U msg -d msg_notify >/dev/null 2>&1 && smoke_redis_cli ping 2>/dev/null | grep -qx PONG; do
   attempt=$((attempt + 1))
   [ "$attempt" -lt 60 ] || { printf '%s\n' SMOKE_DATABASE_START_FAILED >&2; exit 1; }
   sleep 1
@@ -77,14 +91,16 @@ INSERT INTO "_prisma_migrations" VALUES ('20261120000000_backup_smoke', now(), N
 CREATE TABLE smoke_live (id integer PRIMARY KEY, value text);
 INSERT INTO smoke_live VALUES (1, 'production-fixture-preserved');
 SQL
-docker exec -e "REDISCLI_AUTH=$redis_password" "$redis" redis-cli set smoke:live production-fixture-preserved >/dev/null
+smoke_redis_cli set smoke:live production-fixture-preserved >/dev/null
+set --
+if [ "$redis_auth" = true ]; then set -- -e "REDISCLI_AUTH=$redis_password"; fi
 docker run -d --name "$runner" --label "msghub.backup-smoke=$token" --network "$network" --read-only --security-opt no-new-privileges:true \
   --tmpfs /tmp:rw,noexec,nosuid,size=512m,mode=1777 \
   --mount "type=bind,src=$fixture/project,dst=/project,readonly" \
   --mount "type=bind,src=$fixture/project/data/backups,dst=/project/data/backups" \
   --mount "type=bind,src=$fixture/identity.txt,dst=/run/secrets/msghub_backup_key,readonly" \
   -e "PGHOST=$postgres" -e PGUSER=msg -e PGDATABASE=msg_notify -e "PGPASSWORD=$pg_password" \
-  -e "REDIS_HOST=$redis" -e "REDISCLI_AUTH=$redis_password" "$image" >/dev/null
+  -e "REDIS_HOST=$redis" "$@" "$image" >/dev/null
 runner_created=true
 attempt=0
 until docker exec "$runner" jq -e '.status == "ready" and .keyConfigured == true' /project/data/backups/control/runner-status.json >/dev/null 2>&1; do
@@ -117,7 +133,7 @@ done
 docker exec "$runner" jq -e '.status == "complete" and .encrypted == true and .verification == "passed" and .restoredTables == 2 and .migrationVersion == "20261120000000_backup_smoke"' "/project/data/backups/archives/$backup_id/manifest.json" >/dev/null
 docker exec "$runner" sh -ec 'set -- /tmp/msghub-verify-*; [ ! -e "$1" ]; set -- /project/data/backups/.work/*; [ ! -e "$1" ]'
 [ "$(docker exec "$postgres" psql -X -A -t -U msg -d msg_notify -c 'SELECT value FROM smoke_live WHERE id = 1')" = production-fixture-preserved ]
-[ "$(docker exec -e "REDISCLI_AUTH=$redis_password" "$redis" redis-cli get smoke:live)" = production-fixture-preserved ]
+[ "$(smoke_redis_cli get smoke:live)" = production-fixture-preserved ]
 # Exercise the API mount contract with no key, network or ability to write archives.
 docker run --rm --network none --read-only --entrypoint sh \
   --mount "type=bind,src=$fixture/project/data/backups/control,dst=/api/control" \
@@ -128,3 +144,4 @@ docker run --rm --network none --read-only --entrypoint sh \
   [ ! -e /run/secrets/msghub_backup_key ]
 '
 printf '%s\n' 'Backup image smoke passed: encrypted archive, real PostgreSQL/Redis restore, isolated cleanup, unchanged live fixtures, API read-only archives.'
+printf 'Redis authentication enabled in fixture: %s\n' "$redis_auth"

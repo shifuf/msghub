@@ -107,6 +107,14 @@ sh scripts/verify-backup-image.sh
 
 该脚本自行构建 runner 镜像，在项目 `data/backups/image-smoke.*` 中创建临时文件，并启动仅内部可见的临时网络、PostgreSQL 16、带认证的 Redis 7 和 runner。所有数据库使用临时存储，不读取生产 `.env`、备份、密钥或数据库卷，不映射宿主机端口。
 
+还需覆盖生产默认的无密码 Redis 环境：
+
+```sh
+sh scripts/verify-backup-image.sh --no-redis-auth
+```
+
+无认证环境必须让 `REDISCLI_AUTH` 保持未设置。将它设置为空字符串仍会让 `redis-cli --rdb` 发起 AUTH；无密码 Redis 会拒绝并使快照失败。完整备份脚本仅在存在实际认证值时导出该变量。
+
 脚本验证默认关闭、runner 任务请求、加密归档、真实 PostgreSQL/Redis 恢复、migration 读取、临时数据清理、原始测试数据库值仍然存在，以及 API 挂载约定（控制目录可写、归档只读、无 age 私钥）。成功或失败后，只清理本次随机命名的容器、网络、镜像和项目临时目录。
 
 需要 Docker daemon、OpenSSL、Git 和 Linux 常用工具。若中断后主机重启，按脚本输出与 `msghub.backup-smoke` 标签识别其临时资源，确认资源属于本次验证再清理。验证脚本不会部署或更新生产应用。

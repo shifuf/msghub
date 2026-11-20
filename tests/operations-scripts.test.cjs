@@ -33,6 +33,8 @@ function handle(name,a){
  if(name==='age'){if(a.includes('-r')){const output=a[a.indexOf('-o')+1],input=a.at(-1);fs.writeFileSync(output,'fixture-age\\n'+fs.readFileSync(input).toString('base64'));return 0;}if(a.includes('-d')){const input=a.at(-1),encoded=fs.readFileSync(input,'utf8').replace(/^fixture-age\\n/,'');process.stdout.write(Buffer.from(encoded,'base64'));return 0;}}
  if(name==='pg_dump'){if(a.includes('--version'))return 0;if(process.env.FAKE_DUMP_FAIL){process.stderr.write('password fixture-secret');return 1;}process.stdout.write('fixture-postgres-custom-dump');return 0;}
  if(name==='pg_isready'){return process.env.FAKE_PG_DOWN?1:0;}
+ if(name==='redis-cli'&&a.includes('--rdb')&&process.env.FAKE_REJECT_EMPTY_REDIS_AUTH&&process.env.REDISCLI_AUTH==='')return 1;
+ if(name==='redis-cli'&&a.includes('--rdb')&&process.env.FAKE_EXPECT_REDIS_AUTH&&process.env.REDISCLI_AUTH!==process.env.FAKE_EXPECT_REDIS_AUTH)return 1;
  if(name==='redis-cli'&&a.includes('-s')&&a.includes('ping')&&process.env.FAKE_REDIS_LOADING){const file=path.join(root,'redis-pings');const count=fs.existsSync(file)?Number(fs.readFileSync(file)):0;fs.writeFileSync(file,String(count+1));if(count<2){process.stdout.write('LOADING fixture RDB\\n');return 0;}}
  if(name==='redis-cli'){if(a.includes('--version'))return 0;if(a.includes('--rdb')){if(process.env.FAKE_REDIS_FAIL)return 1;fs.writeFileSync(a[a.indexOf('--rdb')+1],'REDIS0009fixture');return 0;}if(a.includes('-s')&&process.env.FAKE_REJECT_LIVE_AUTH&&process.env.REDISCLI_AUTH)return 1;if(a.includes('shutdown')){try{fs.unlinkSync(a[a.indexOf('-s')+1]);}catch{}return 0;}if(a.includes('ping')){process.stdout.write('PONG\\n');return process.env.FAKE_REDIS_DOWN?1:0;}if(a.includes('dbsize')){process.stdout.write('12\\n');return 0;}}
  if(name==='initdb'){const dir=a[a.indexOf('-D')+1];fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'initialized'),'ok');return 0;}
@@ -98,6 +100,20 @@ test('verification restores on private sockets without forwarding live database 
   assert.match(temporaryName, /^msghub-verify-[a-f0-9]{32}$/, 'the private socket path must fit Linux sockaddr_un');
   assert.equal(fs.existsSync(restorePg.args[restorePg.args.indexOf('-D') + 1]), false);
   assert.deepEqual(fs.readdirSync(path.join(ctx.dir, 'tmp')), []);
+});
+
+test('an unauthenticated Redis snapshot does not receive an empty AUTH environment variable', { skip: !toolsAvailable }, t => {
+  const ctx = fixture(t); const id = randomUUID();
+  const result = ctx.run('backup-full.sh', [id], { REDISCLI_AUTH: '', REDIS_PASSWORD: '', FAKE_REJECT_EMPTY_REDIS_AUTH: '1' });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
+  const manifest = JSON.parse(fs.readFileSync(path.join(ctx.dir, 'data/backups/archives', id, 'manifest.json')));
+  assert.equal(manifest.status, 'complete');
+});
+
+test('a configured Redis authentication fallback is still passed to the snapshot client', { skip: !toolsAvailable }, t => {
+  const ctx = fixture(t); const id = randomUUID();
+  const result = ctx.run('backup-full.sh', [id], { REDISCLI_AUTH: '', REDIS_PASSWORD: 'fixture-auth-fallback', FAKE_EXPECT_REDIS_AUTH: 'fixture-auth-fallback' });
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
 });
 
 test('partially started PostgreSQL is stopped before failed verification removes temporary data', { skip: !toolsAvailable }, t => {

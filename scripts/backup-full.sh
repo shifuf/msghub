@@ -38,7 +38,13 @@ export PGPASSWORD=${PGPASSWORD:-${POSTGRES_PASSWORD:-}}
 pg_dump --format=custom --no-owner --no-acl --host="${PGHOST:-postgres}" --port="${PGPORT:-5432}" --username="${PGUSER:-${POSTGRES_USER:-msg}}" --dbname="${PGDATABASE:-${POSTGRES_DB:-msg_notify}}" > "$work/database.dump" 2>/dev/null || fail DATABASE_DUMP_FAILED
 [ -s "$work/database.dump" ] || fail DATABASE_DUMP_FAILED
 backup_error=REDIS_SNAPSHOT_FAILED
-export REDISCLI_AUTH=${REDISCLI_AUTH:-${REDIS_PASSWORD:-}}
+# redis-cli --rdb treats even an empty REDISCLI_AUTH as a request to authenticate.
+# A Redis instance without authentication rejects that request before the snapshot starts.
+if [ -n "${REDISCLI_AUTH:-${REDIS_PASSWORD:-}}" ]; then
+  export REDISCLI_AUTH="${REDISCLI_AUTH:-${REDIS_PASSWORD:-}}"
+else
+  unset REDISCLI_AUTH
+fi
 redis-cli -h "${REDIS_HOST:-redis}" -p "${REDIS_PORT:-6379}" --rdb "$work/redis.rdb" >/dev/null 2>&1 || fail REDIS_SNAPSHOT_FAILED
 [ -s "$work/redis.rdb" ] || fail REDIS_SNAPSHOT_FAILED
 backup_error=ENVIRONMENT_CAPTURE_FAILED
