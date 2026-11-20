@@ -10,6 +10,8 @@ import { SEND_QUEUE, SendJobData } from './queue.constants';
 import { sanitizeErrorMessage } from '../common/utils';
 import { EmailPolicyService } from '../email-policy/email-policy.service';
 import { safeAdapterSend } from '../common/delivery.util';
+import { snapshotJpushTarget, withoutConversationToken } from '../adapters/jpush-audience';
+import { addDeviceReceiptTokens } from '../adapters/jpush-receipts';
 
 @Processor(SEND_QUEUE)
 export class SendProcessor extends WorkerHost {
@@ -76,12 +78,23 @@ export class SendProcessor extends WorkerHost {
       },
     });
     const alertCfg = (backup.config || {}) as Record<string, unknown>;
+    let alertExtra: Record<string, unknown> = { messageId: alertLog.id };
+    if (backup.type === ChannelType.JPUSH) {
+      alertExtra = snapshotJpushTarget(alertCfg, alertExtra);
+      const { resolveUnsubscribeSecret, signReadToken, signConversationToken } = await import('../common/token.util');
+      const secret = resolveUnsubscribeSecret(process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, { allowDevFallback: true });
+      alertExtra = addDeviceReceiptTokens(alertLog.id, { ...alertExtra, readToken: signReadToken(alertLog.id, secret), conversationId: alertLog.id, conversationToken: signConversationToken(alertLog.id, secret) }, secret);
+    }
+    const audience = alertExtra._jpushAudience as any;
+    const toAddress = audience?.registration_id?.[0] || audience?.alias?.[0] || null;
+    await this.prisma.messageLog.update({ where: { id: alertLog.id }, data: { toAddress, payload: { title, content, to: toAddress, extra: withoutConversationToken(alertExtra) } as any } });
     const alertStarted = Date.now();
-    const alertResult = await safeAdapterSend(this.adapters, backup.type, alertCfg, { title, content });
+    const alertResult = await safeAdapterSend(this.adapters, backup.type, alertCfg, { title, content, to: toAddress || undefined, extra: alertExtra });
     await this.prisma.messageLog.update({
       where: { id: alertLog.id },
       data: {
         status: alertResult.success ? MessageStatus.SUCCESS : MessageStatus.FAILED,
+        providerAcceptedAt: alertResult.success && backup.type !== ChannelType.INBOX ? new Date() : null,
         response: alertResult.response as any,
         errorMessage: sanitizeErrorMessage(alertResult.errorMessage),
         durationMs: Date.now() - alertStarted,
@@ -186,23 +199,37 @@ export class SendProcessor extends WorkerHost {
     // 推送补齐 messageId/readToken（队列 payload 可能在入库后注入过）
     let sendPayload: any = data.payload || {};
     if (data.kind === 'push') {
-      const extra = { ...(sendPayload.extra || {}) };
+      let extra = withoutConversationToken(sendPayload.extra || {});
+      if (channel.type === ChannelType.JPUSH && !extra._jpushAudience) extra = snapshotJpushTarget(config, extra);
       if (!extra.messageId) extra.messageId = data.messageId;
       try {
-        const { resolveUnsubscribeSecret, signReadToken } = await import(
+        const { resolveUnsubscribeSecret, signReadToken, signConversationToken } = await import(
           '../common/token.util'
         );
-        if (!extra.readToken) {
-          const secret = resolveUnsubscribeSecret(
-            process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET,
-            { allowDevFallback: true },
-          );
-          extra.readToken = signReadToken(data.messageId, secret);
+        const secret = resolveUnsubscribeSecret(
+          process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET,
+          { allowDevFallback: true },
+        );
+        extra.messageId = data.messageId;
+        extra.readToken = signReadToken(data.messageId, secret);
+        delete extra.replyId;
+        delete extra.conversationId;
+        delete extra.conversationToken;
+        if (channel.type === ChannelType.JPUSH && extra._jpushAppKey) {
+          extra.conversationId = data.messageId;
+          extra.conversationToken = signConversationToken(data.messageId, secret);
+          extra = addDeviceReceiptTokens(data.messageId, extra, secret);
         }
       } catch {
         /* ignore */
       }
       sendPayload = { ...sendPayload, extra };
+      if (channel.type === ChannelType.JPUSH) {
+        // Queued old payloads acquire capability metadata before the device can fetch.
+        await this.prisma.messageLog.update({ where: { id: data.messageId }, data: {
+          payload: { ...sendPayload, extra: withoutConversationToken(extra), _deliveryMode: 'queue' } as any,
+        } });
+      }
     }
     const started = Date.now();
     const claimed = await this.prisma.messageLog.updateMany({
@@ -348,7 +375,7 @@ export class SendProcessor extends WorkerHost {
                       html: payload.html,
                       to: payload.to,
                       extra: {
-                        ...(payload.extra || {}),
+                        ...withoutConversationToken(payload.extra || {}),
                         failoverFrom: log.id,
                       },
                     } as any,
@@ -363,17 +390,32 @@ export class SendProcessor extends WorkerHost {
                 });
                 const foCfg = (ch.config || {}) as Record<string, unknown>;
                 const foStarted = Date.now();
-                const { resolveUnsubscribeSecret, signReadToken } = await import('../common/token.util');
-                const foExtra = { ...(payload.extra || {}), messageId: foLog.id, readToken: signReadToken(foLog.id, resolveUnsubscribeSecret(process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, { allowDevFallback: true })) };
+                const { resolveUnsubscribeSecret, signReadToken, signConversationToken } = await import('../common/token.util');
+                const foSecret = resolveUnsubscribeSecret(process.env.UNSUBSCRIBE_SECRET || process.env.JWT_SECRET, { allowDevFallback: true });
+                const foExtra: Record<string, unknown> = { ...withoutConversationToken(payload.extra || {}), messageId: foLog.id, readToken: signReadToken(foLog.id, foSecret) };
+                delete foExtra.conversationId;
+                delete foExtra.conversationToken;
+                delete foExtra.replyId;
+                if (ch.type === ChannelType.JPUSH) {
+                  delete foExtra.registrationId;
+                  delete foExtra.alias;
+                  Object.assign(foExtra, snapshotJpushTarget(foCfg, foExtra));
+                  foExtra.conversationId = foLog.id;
+                  foExtra.conversationToken = signConversationToken(foLog.id, foSecret);
+                  Object.assign(foExtra, addDeviceReceiptTokens(foLog.id, foExtra, foSecret));
+                }
+                const foAudience = foExtra._jpushAudience as any;
+                const foTo = ch.type === ChannelType.JPUSH ? foAudience?.registration_id?.[0] || foAudience?.alias?.[0] || null : payload.to || log.toAddress;
                 await this.prisma.messageLog.update({ where: { id: foLog.id }, data: {
                   deliveryStartedAt: new Date(),
-                  payload: { title: payload.title || log.title, content: payload.content || log.content, html: payload.html, to: payload.to || log.toAddress, extra: { ...foExtra, failoverFrom: log.id } } as any,
+                  toAddress: foTo,
+                  payload: { title: payload.title || log.title, content: payload.content || log.content, html: payload.html, to: foTo, extra: { ...withoutConversationToken(foExtra), failoverFrom: log.id } } as any,
                 } });
                 const foResult = await safeAdapterSend(this.adapters, ch.type, foCfg, {
                   title: payload.title || log.title || undefined,
                   content: payload.content || log.content || undefined,
                   html: payload.html,
-                  to: payload.to || log.toAddress || undefined,
+                  to: foTo || undefined,
                   extra: foExtra,
                 });
                 await this.prisma.messageLog.update({
@@ -382,6 +424,7 @@ export class SendProcessor extends WorkerHost {
                     status: foResult.success
                       ? MessageStatus.SUCCESS
                       : MessageStatus.FAILED,
+                    providerAcceptedAt: foResult.success && ch.type !== ChannelType.INBOX ? new Date() : null,
                     response: foResult.response as any,
                     errorMessage: sanitizeErrorMessage(foResult.errorMessage),
                     durationMs: Date.now() - foStarted,
@@ -466,6 +509,7 @@ export class SendProcessor extends WorkerHost {
       where: { id: data.messageId },
       data: {
         status: MessageStatus.SUCCESS,
+        providerAcceptedAt: channel.type !== ChannelType.INBOX ? new Date() : null,
         response: result.response as any,
         errorMessage: null,
         durationMs,

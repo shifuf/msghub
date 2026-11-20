@@ -55,8 +55,12 @@ export class CreateScheduleDto {
   runAt: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['daily', 'weekly', 'weekdays'])
   cron?: string;
+
+  @IsOptional()
+  @IsString()
+  timezone?: string;
 }
 
 export class UpdateScheduleDto {
@@ -64,7 +68,8 @@ export class UpdateScheduleDto {
   @IsOptional() @IsString() content?: string;
   @IsOptional() @IsString() html?: string;
   @IsOptional() @IsDateString() runAt?: string;
-  @IsOptional() @IsString() cron?: string;
+  @IsOptional() @IsIn(['daily', 'weekly', 'weekdays']) cron?: string;
+  @IsOptional() @IsString() timezone?: string;
   @IsOptional() @IsObject() variables?: Record<string, unknown>;
 }
 

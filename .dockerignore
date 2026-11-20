@@ -9,3 +9,6 @@ docs
 tests
 data
 docs/backups
+.work
+deployments
+clients/

@@ -39,6 +39,10 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
     restart: unless-stopped
     environment:
       APP_ENV: production
@@ -57,6 +61,15 @@ services:
       PORT: 3010
       TRUST_PROXY: ${TRUST_PROXY:-172.16.0.0/12,10.0.0.0/8,192.168.0.0/16}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
+      OPERATIONS_PROJECT_ROOT: /app
+    volumes:
+      - type: bind
+        source: ./data/backups/control
+        target: /app/data/backups/control
+      - type: bind
+        source: ./data/backups/archives
+        target: /app/data/backups/archives
+        read_only: true
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +85,9 @@ services:
     build:
       context: .
       dockerfile: apps/web/Dockerfile
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
     restart: unless-stopped
     environment:
       APP_ENV: ${APP_ENV:-production}
@@ -82,6 +98,60 @@ services:
         condition: service_healthy
     ports:
       - '${WEB_PORT:-8185}:80'
+
+  backup-runner:
+    profiles: ['backups']
+    image: msghub-backup-runner:local
+    build:
+      context: .
+      dockerfile: scripts/backup.Dockerfile
+      args:
+        APP_COMMIT: ${APP_COMMIT:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-unknown}
+        ALPINE_MIRROR: ${ALPINE_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PROJECT_ROOT: /project
+      BACKUP_KEY_FILE: /run/secrets/msghub_backup_key
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: msg
+      PGDATABASE: msg_notify
+      PGPASSWORD: msg123456
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    volumes:
+      - type: bind
+        source: ./data/backups
+        target: /project/data/backups
+      - type: bind
+        source: ./.env
+        target: /project/.env
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ./docker-compose.yml
+        target: /project/docker-compose.yml
+        read_only: true
+        bind:
+          create_host_path: false
+    secrets:
+      - msghub_backup_key
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=${BACKUP_VERIFY_TMPFS_SIZE:-2g},mode=1777
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+secrets:
+  msghub_backup_key:
+    file: ${BACKUP_AGE_IDENTITY_FILE:-./data/backup-secrets/identity.txt}
 
 volumes:
   msg_pg_data:

@@ -302,12 +302,19 @@ model MessageLog {
   nextRetryAt   DateTime?
   readAt        DateTime?
   deliveredAt   DateTime?
+  providerAcceptedAt DateTime?
+  deviceReceivedAt DateTime?
+  deviceDisplayedAt DateTime?
   deliveryStartedAt DateTime?
   fallbackSentAt DateTime?
   archivedAt    DateTime?
+  conversationActivityAt DateTime?
+  conversationClosedAt DateTime?
   parentId      String?
   createdAt     DateTime         @default(now())
   updatedAt     DateTime         @updatedAt
+  replies       MessageReply[]
+  deviceReceipts DeviceReceipt[]
 
   @@index([projectId, createdAt])
   @@index([status, createdAt])
@@ -318,6 +325,69 @@ model MessageLog {
   @@index([status, nextRetryAt])
   @@index([eventCode])
   @@index([updatedAt, id])
+  @@index([channelType, conversationActivityAt])
+  @@index([deviceReceivedAt, deviceDisplayedAt])
+}
+
+model MessageReply {
+  id             String     @id @default(cuid())
+  messageId      String
+  message        MessageLog @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  author         String
+  content        String
+  clientId       String
+  createdAt      DateTime   @default(now())
+  readAt         DateTime?
+  deliveryStatus String     @default("STORED")
+  deliveryError  String?
+
+  @@unique([messageId, author, clientId])
+  @@index([messageId, createdAt, id])
+}
+
+model DevicePairingCode {
+  id         String   @id @default(cuid())
+  codeHash   String   @unique
+  appKey     String
+  channelId  String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  createdBy  String?
+  createdAt  DateTime @default(now())
+
+  @@index([expiresAt, consumedAt])
+}
+
+model JpushDevice {
+  id                    String   @id @default(cuid())
+  registrationId        String   @unique
+  appKey                String
+  credentialHash        String   @unique
+  name                  String?
+  appVersion            String?
+  osVersion             String?
+  notificationsEnabled  Boolean?
+  channelEnabled        Boolean?
+  connected             Boolean  @default(false)
+  lastSeenAt            DateTime @default(now())
+  revokedAt             DateTime?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  @@index([appKey, revokedAt])
+  @@index([lastSeenAt])
+}
+
+model DeviceReceipt {
+  id               String   @id @default(cuid())
+  messageId        String
+  message          MessageLog @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  registrationId   String
+  arrivedAt        DateTime @default(now())
+  displayedAt      DateTime?
+
+  @@unique([messageId, registrationId])
+  @@index([registrationId, arrivedAt])
 }
 
 model TemplateRevision {
@@ -347,6 +417,7 @@ model ScheduledMessage {
   variables    Json?
   runAt        DateTime
   cron         String?
+  timezone     String       @default("Asia/Shanghai")
   status       String       @default("PENDING")
   lastError    String?
   messageId    String?
@@ -355,10 +426,24 @@ model ScheduledMessage {
   attempt      Int          @default(0)
   createdAt    DateTime     @default(now())
   updatedAt    DateTime     @updatedAt
+  executions   ScheduleExecution[]
 
   @@index([status, runAt])
   @@index([status, leaseUntil])
   @@index([projectId])
+}
+
+model ScheduleExecution {
+  id         String @id @default(cuid())
+  scheduleId String
+  schedule   ScheduledMessage @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  startedAt  DateTime
+  finishedAt DateTime?
+  status     String
+  messageId  String?
+  error      String?
+
+  @@index([scheduleId, startedAt])
 }
 
 // Audit archive of pre-migration duplicate global configuration rows.

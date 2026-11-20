@@ -23,6 +23,10 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
       if (sensitiveDays) {
         const active = await this.prisma.scheduledMessage.findMany({ where: { status: { in: ['PENDING', 'RUNNING', 'PAUSED', 'UNCERTAIN'] }, messageId: { not: null } }, select: { messageId: true } });
         const protectedIds = active.map(r => r.messageId!).filter(Boolean);
+        const settledConversation: Prisma.MessageLogWhereInput = {
+          OR: [{ conversationActivityAt: null }, { conversationClosedAt: { not: null } }],
+          replies: { none: { deliveryStatus: { in: ['PENDING', 'UNCERTAIN'] } } },
+        };
         // Only known sensitive templates; preserve operational metadata and fallback markers.
         const messages = await this.prisma.messageLog.findMany({ where: {
           templateCode: { in: ['login', 'register', 'reset_password'] }, createdAt: { lt: before(sensitiveDays) }, id: { notIn: protectedIds },
@@ -30,11 +34,12 @@ export class RetentionService implements OnModuleInit, OnModuleDestroy {
             { OR: [{ status: 'SUCCESS' }, { status: 'FAILED', deliveryStartedAt: null }] },
             { OR: [{ errorMessage: null }, { NOT: { errorMessage: { startsWith: 'DELIVERY_UNKNOWN:' } } }] },
             { OR: [{ content: null }, { content: { not: '[已按保留策略脱敏]' } }] },
+            settledConversation,
           ],
         }, take: 500, orderBy: { createdAt: 'asc' } });
         for (const row of messages) {
           const payload = row.payload as Record<string, any> | null;
-          await this.prisma.messageLog.updateMany({ where: { id: row.id, updatedAt: row.updatedAt, status: { in: ['SUCCESS', 'FAILED'] } }, data: { title: '敏感通知（已脱敏）', content: '[已按保留策略脱敏]', toAddress: null, errorMessage: row.errorMessage ? '[已脱敏错误详情]' : null, attemptDetail: Prisma.DbNull, response: Prisma.DbNull, payload: { redacted: true, emailFallback: payload?.emailFallback ? { at: payload.emailFallback.at, emailMessageId: payload.emailFallback.emailMessageId } : null } } });
+          await this.prisma.messageLog.updateMany({ where: { id: row.id, updatedAt: row.updatedAt, status: { in: ['SUCCESS', 'FAILED'] }, AND: [settledConversation] }, data: { title: '敏感通知（已脱敏）', content: '[已按保留策略脱敏]', toAddress: null, errorMessage: row.errorMessage ? '[已脱敏错误详情]' : null, attemptDetail: Prisma.DbNull, response: Prisma.DbNull, payload: { redacted: true, emailFallback: payload?.emailFallback ? { at: payload.emailFallback.at, emailMessageId: payload.emailFallback.emailMessageId } : null } } });
         }
       }
       // Do not release unfinished requests: an external send may already have succeeded.

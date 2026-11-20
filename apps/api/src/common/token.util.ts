@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'crypto';
+import { createHash, createHmac, timingSafeEqual } from 'crypto';
 import Handlebars from 'handlebars';
 
 export type UnsubscribePayload = {
@@ -178,4 +178,66 @@ export function verifyReadToken(
   } catch {
     return false;
   }
+}
+
+/** Separate capability: a read receipt never grants conversation access. */
+export function signConversationToken(messageId: string, secret: string): string {
+  return `${b64url(messageId)}.${b64url(createHmac('sha256', secret).update(`conversation:v1:${messageId}`).digest())}`;
+}
+
+export function verifyConversationToken(messageId: string, token: string, secret: string): boolean {
+  if (!messageId || !token || !secret) return false;
+  const expected = Buffer.from(signConversationToken(messageId, secret));
+  const actual = Buffer.from(token);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+export type DeviceReceiptTokenPayload = {
+  messageId: string;
+  registrationId: string;
+  exp: number;
+};
+
+/** Bind an app receiver's report to one JPush target and this signed notification. */
+export function signDeviceReceiptToken(
+  messageId: string,
+  registrationId: string,
+  exp: number,
+  secret: string,
+): string {
+  const payload = b64url(JSON.stringify({ messageId, registrationId, exp }));
+  const signature = b64url(createHmac('sha256', secret).update(`device-receipt:v1:${payload}`).digest());
+  return `${payload}.${signature}`;
+}
+
+export function verifyDeviceReceiptToken(
+  token: string,
+  secret: string,
+  nowSec = Math.floor(Date.now() / 1000),
+  expected?: { messageId?: string; registrationId?: string },
+): DeviceReceiptTokenPayload | null {
+  if (!token || !secret || !Number.isSafeInteger(nowSec) || token.length > 4096) return null;
+  const parts = token.split('.');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+  const [payload, signature] = parts;
+  const wanted = b64url(createHmac('sha256', secret).update(`device-receipt:v1:${payload}`).digest());
+  try {
+    const received = Buffer.from(signature);
+    const valid = Buffer.from(wanted);
+    if (received.length !== valid.length || !timingSafeEqual(received, valid)) return null;
+    const decoded = JSON.parse(fromB64url(payload).toString('utf8')) as Partial<DeviceReceiptTokenPayload>;
+    if (typeof decoded.messageId !== 'string' || !decoded.messageId || decoded.messageId.length > 128) return null;
+    if (typeof decoded.registrationId !== 'string' || !decoded.registrationId || decoded.registrationId.length > 512) return null;
+    if (!Number.isSafeInteger(decoded.exp) || (decoded.exp as number) <= nowSec || (decoded.exp as number) > nowSec + 864000) return null;
+    if (expected?.messageId !== undefined && decoded.messageId !== expected.messageId) return null;
+    if (expected?.registrationId !== undefined && decoded.registrationId !== expected.registrationId) return null;
+    return { messageId: decoded.messageId, registrationId: decoded.registrationId, exp: decoded.exp as number };
+  } catch {
+    return null;
+  }
+}
+
+/** Store reusable device credentials only as SHA-256 digests. */
+export function hashDeviceCredential(credential: string): string {
+  return createHash('sha256').update(credential, 'utf8').digest('hex');
 }

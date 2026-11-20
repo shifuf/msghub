@@ -204,6 +204,7 @@
               {{ detail.archivedAt ? '取消归档' : '归档' }}
             </n-button>
           </div>
+          <MessageConversation v-if="showDetail && detail.channelType === 'JPUSH'" :key="detail.id" :message-id="detail.id" />
         </template>
       </n-drawer-content>
     </n-drawer>
@@ -475,6 +476,7 @@
 
 <script setup lang="ts">
 import SafeHtmlPreview from '@/components/SafeHtmlPreview.vue';
+import MessageConversation from '@/components/MessageConversation.vue';
 import { computed, h, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {

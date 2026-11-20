@@ -51,6 +51,11 @@ export class SchedulesController {
   @Post(':id/resolve')
   async resolve(@Param('id') id: string, @Body() dto: ResolveScheduleDto) { return ok(await this.schedules.resolve(id, dto)); }
 
+  @Get(':id/executions')
+  async history(@Param('id') id: string, @Query('page') page?: string, @Query('pageSize') pageSize?: string) {
+    return ok(await this.schedules.history(id, { page: page ? Number(page) : undefined, pageSize: pageSize ? Number(pageSize) : undefined }));
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     return ok(await this.schedules.get(id));

@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Prism" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/via_accent</item>
+        <item name="colorPrimaryVariant">@color/via_accent</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/via_accent</item>
+        <item name="colorSurface">@color/via_card</item>
+        <item name="colorOnSurface">@color/via_text</item>
+        <item name="android:colorBackground">@color/via_bg</item>
+        <item name="android:statusBarColor">@color/via_status_bar</item>
+        <item name="android:navigationBarColor">@color/via_chrome</item>
+        <item name="android:windowBackground">@color/via_bg</item>
+        <item name="android:textColorPrimary">@color/via_text</item>
+        <item name="android:textColorSecondary">@color/via_text_secondary</item>
+        <item name="popupMenuStyle">@style/ViaPopupMenu</item>
+        <item name="alertDialogTheme">@style/ViaAlertDialog</item>
+        <item name="materialAlertDialogTheme">@style/ViaAlertDialog</item>
+        <item name="shapeAppearanceSmallComponent">@style/ViaShapeSmall</item>
+        <item name="shapeAppearanceMediumComponent">@style/ViaShapeMedium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ViaShapeLarge</item>
+        <item name="buttonStyle">@style/ViaButton</item>
+        <item name="materialButtonStyle">@style/ViaButton</item>
+    </style>
+
+    <style name="ViaShapeSmall" parent="ShapeAppearance.MaterialComponents.SmallComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">12dp</item>
+    </style>
+    <style name="ViaShapeMedium" parent="ShapeAppearance.MaterialComponents.MediumComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">16dp</item>
+    </style>
+    <style name="ViaShapeLarge" parent="ShapeAppearance.MaterialComponents.LargeComponent">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">28dp</item>
+    </style>
+
+    <style name="ViaButton" parent="Widget.MaterialComponents.Button">
+        <item name="cornerRadius">16dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+        <item name="backgroundTint">@color/via_accent</item>
+        <item name="android:textColor">@android:color/white</item>
+    </style>
+
+    <style name="ViaPopupMenu" parent="Widget.MaterialComponents.PopupMenu">
+        <item name="android:popupBackground">@drawable/bg_popup</item>
+    </style>
+
+    <style name="ViaAlertDialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="colorPrimary">@color/via_accent</item>
+        <item name="colorSurface">@color/via_card</item>
+        <item name="colorOnSurface">@color/via_text</item>
+        <item name="shapeAppearanceOverlay">@style/ViaShapeLarge</item>
+        <item name="materialAlertDialogTitleTextStyle">@style/ViaDialogTitle</item>
+        <item name="materialAlertDialogBodyTextStyle">@style/ViaDialogBody</item>
+        <item name="buttonBarPositiveButtonStyle">@style/ViaDialogButton</item>
+        <item name="buttonBarNegativeButtonStyle">@style/ViaDialogButton</item>
+        <item name="buttonBarNeutralButtonStyle">@style/ViaDialogButton</item>
+        <item name="android:backgroundDimAmount">0.45</item>
+    </style>
+
+    <style name="ViaDialogTitle" parent="MaterialAlertDialog.MaterialComponents.Title.Text">
+        <item name="android:textColor">@color/via_text</item>
+        <item name="android:textSize">18sp</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="ViaDialogBody" parent="MaterialAlertDialog.MaterialComponents.Body.Text">
+        <item name="android:textColor">@color/via_text_secondary</item>
+        <item name="android:textSize">16sp</item>
+    </style>
+
+    <style name="ViaDialogButton" parent="Widget.MaterialComponents.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/via_accent</item>
+        <item name="cornerRadius">14dp</item>
+        <item name="rippleColor">@color/via_accent_soft</item>
+        <item name="android:minWidth">64dp</item>
+    </style>
+
+    <style name="ViaToolbarIcon">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">48dp</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">?attr/selectableItemBackgroundBorderless</item>
+        <item name="android:scaleType">centerInside</item>
+        <item name="android:padding">11dp</item>
+        <item name="android:tint">@color/via_icon</item>
+    </style>
+</resources>

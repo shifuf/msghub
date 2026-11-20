@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <div class="page-title">定时发送</div>
-        <div class="page-subtitle">一次性或每日重复的定时推送任务</div>
+        <div class="page-subtitle">一次性、每日、工作日或每周执行；明确失败继续按周期运行，未知结果需要核实</div>
       </div>
       <n-button type="primary" @click="openCreate">新建定时</n-button>
     </div>
@@ -91,9 +91,13 @@
             :actions="['clear', 'confirm']"
           />
         </n-form-item>
-        <n-form-item label="每日重复">
-          <n-switch v-model:value="form.daily" />
-          <span class="ml-2 text-xs text-slate-400">每日执行；停机期间错过的任务合并一次</span>
+        <n-form-item label="重复规则">
+          <n-select v-model:value="form.cron" :options="recurrenceOptions" />
+          <div class="mt-1 text-xs text-slate-400">暂停期间错过的周期会合并一次。失败会记录本次结果并进入下个周期；送达状态未知时暂停，等待人工核实。</div>
+        </n-form-item>
+        <n-form-item label="时区">
+          <n-input v-model:value="form.timezone" placeholder="Asia/Shanghai" />
+          <div class="mt-1 text-xs text-slate-400">使用 IANA 时区，例如 Asia/Shanghai 或 America/New_York。</div>
         </n-form-item>
       </n-form>
       <template #footer>
@@ -102,6 +106,16 @@
           <n-button type="primary" :loading="creating" @click="create">{{ editingId ? '保存' : '创建' }}</n-button>
         </n-space>
       </template>
+    </n-modal>
+
+    <n-modal v-model:show="showHistory" preset="card" :title="historySchedule ? `执行历史：${historySchedule.title || historySchedule.id}` : '执行历史'" style="width: min(740px, calc(100vw - 24px))">
+      <div class="mb-3 text-sm text-slate-500">时间按任务时区 {{ historySchedule?.timezone || 'Asia/Shanghai' }} 显示。未知送达结果会保留为待核实记录。</div>
+      <n-data-table :columns="historyColumns" :data="historyItems" :loading="loadingHistory" :bordered="false" :pagination="false" />
+      <n-space justify="end" class="mt-4">
+        <span class="mr-auto text-xs text-slate-400">共 {{ historyTotal }} 次执行</span>
+        <n-button :disabled="historyPage <= 1 || loadingHistory" @click="changeHistoryPage(historyPage - 1)">上一页</n-button>
+        <n-button :disabled="historyPage * historyPageSize >= historyTotal || loadingHistory" @click="changeHistoryPage(historyPage + 1)">下一页</n-button>
+      </n-space>
     </n-modal>
   </div>
 </template>
@@ -118,7 +132,6 @@ import {
   NFormItem,
   NInput,
   NDatePicker,
-  NSwitch,
   NSpace,
   useMessage,
   useDialog,
@@ -132,8 +145,15 @@ import {
 const list = ref<any[]>([]);
 const loading = ref(false);
 const showCreate = ref(false);
+const showHistory = ref(false);
 const creating = ref(false);
 const editingId = ref<string | null>(null);
+const historySchedule = ref<any | null>(null);
+const historyItems = ref<any[]>([]);
+const historyTotal = ref(0);
+const historyPage = ref(1);
+const historyPageSize = 10;
+const loadingHistory = ref(false);
 const pagination = reactive({ page: 1, pageSize: 20, itemCount: 0 });
 function changePage(page: number) { pagination.page = page; void load(); }
 const loadingChannels = ref(false);
@@ -154,8 +174,16 @@ const form = reactive({
   title: '定时通知',
   content: '这是一条定时发送的消息',
   runAt: null as number | null,
-  daily: false,
+  cron: '',
+  timezone: 'Asia/Shanghai',
 });
+
+const recurrenceOptions = [
+  { label: '一次执行', value: '' },
+  { label: '每日', value: 'daily' },
+  { label: '工作日（周一至周五）', value: 'weekdays' },
+  { label: '每周（与首次日期同一星期）', value: 'weekly' },
+];
 
 const statusOptions = [
   { label: '待执行', value: 'PENDING' },
@@ -204,8 +232,8 @@ const columns = [
   {
     title: '执行时间',
     key: 'runAt',
-    width: 170,
-    render: (r: any) => formatTime(r.runAt),
+    width: 205,
+    render: (r: any) => formatScheduleTime(r.runAt, r.timezone),
   },
   {
     title: '项目',
@@ -224,11 +252,8 @@ const columns = [
   {
     title: '重复',
     key: 'cron',
-    width: 90,
-    render: (r: any) =>
-      r.cron
-        ? h(NTag, { size: 'small', type: 'info' }, { default: () => r.cron })
-        : h('span', { class: 'text-slate-400' }, '一次'),
+    width: 140,
+    render: (r: any) => recurrenceLabel(r.cron),
   },
   {
     title: '状态',
@@ -253,19 +278,62 @@ const columns = [
   {
     title: '操作',
     key: 'actions',
-    width: 220,
+    width: 300,
     fixed: 'right' as const,
-    render: (r: any) => ['PENDING', 'PAUSED'].includes(r.status)
-      ? h(NSpace, {}, { default: () => [
-          h(NButton, { size: 'small', onClick: () => edit(r) }, { default: () => '编辑' }),
-          h(NButton, { size: 'small', onClick: () => togglePause(r) }, { default: () => r.status === 'PAUSED' ? '恢复' : '暂停' }),
-          h(NButton, { size: 'small', type: 'error', onClick: () => cancel(r) }, { default: () => '取消' }),
-        ] }) : r.status === 'UNCERTAIN' ? h(NSpace, {}, { default: () => [
-          h(NButton, { size: 'small', onClick: () => resolveUncertain(r, 'delivered') }, { default: () => '确认已送达' }),
-          h(NButton, { size: 'small', type: 'warning', onClick: () => resolveUncertain(r, 'retry') }, { default: () => '确认后重试' }),
-        ] }) : h('span', { class: 'text-slate-300' }, '-'),
+    render: (r: any) => {
+      const actions = [h(NButton, { size: 'small', onClick: () => openHistory(r) }, { default: () => '执行历史' })];
+      if (['PENDING', 'PAUSED'].includes(r.status)) actions.push(
+        h(NButton, { size: 'small', onClick: () => edit(r) }, { default: () => '编辑' }),
+        h(NButton, { size: 'small', onClick: () => togglePause(r) }, { default: () => r.status === 'PAUSED' ? '恢复' : '暂停' }),
+        h(NButton, { size: 'small', type: 'error', onClick: () => cancel(r) }, { default: () => '取消' }),
+      );
+      if (r.status === 'UNCERTAIN') actions.push(
+        h(NButton, { size: 'small', onClick: () => resolveUncertain(r, 'delivered') }, { default: () => '确认已送达' }),
+        h(NButton, { size: 'small', type: 'warning', onClick: () => resolveUncertain(r, 'retry') }, { default: () => '确认后重试' }),
+      );
+      return h(NSpace, { wrap: false }, { default: () => actions });
+    },
   },
 ];
+
+const historyColumns = [
+  { title: '开始时间', key: 'startedAt', width: 190, render: (r: any) => formatScheduleTime(r.startedAt, historySchedule.value?.timezone) },
+  { title: '结束时间', key: 'finishedAt', width: 190, render: (r: any) => r.finishedAt ? formatScheduleTime(r.finishedAt, historySchedule.value?.timezone) : '执行中' },
+  { title: '结果', key: 'status', width: 100, render: (r: any) => h(NTag, { size: 'small', type: statusType(r.status) }, { default: () => statusLabel(r.status) }) },
+  { title: '消息 ID', key: 'messageId', width: 150, ellipsis: { tooltip: true }, render: (r: any) => r.messageId || '-' },
+  { title: '错误', key: 'error', ellipsis: { tooltip: true }, render: (r: any) => r.error || '-' },
+];
+
+function formatScheduleTime(value: string | Date, timezone?: string) {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '-';
+  try { return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short', timeZone: timezone || 'Asia/Shanghai' }).format(date); }
+  catch { return formatTime(date); }
+}
+
+function recurrenceLabel(cron?: string | null) {
+  return ({ daily: '每日', weekdays: '工作日', weekly: '每周' } as Record<string, string>)[cron || ''] || '一次';
+}
+
+async function openHistory(row: any) {
+  historySchedule.value = row;
+  historyPage.value = 1;
+  showHistory.value = true;
+  await loadHistory();
+}
+
+async function loadHistory() {
+  if (!historySchedule.value) return;
+  loadingHistory.value = true;
+  try {
+    const result: any = await schedulesApi.executions(historySchedule.value.id, { page: historyPage.value, pageSize: historyPageSize });
+    historyItems.value = result?.items || [];
+    historyTotal.value = result?.total || 0;
+  } catch (e: any) { message.error(e.message || '加载执行历史失败'); }
+  finally { loadingHistory.value = false; }
+}
+
+async function changeHistoryPage(page: number) { historyPage.value = page; await loadHistory(); }
 
 async function load() {
   loading.value = true;
@@ -311,6 +379,8 @@ async function onProjectChange(v: string | null) {
 
 function openCreate() {
   editingId.value = null;
+  form.cron = '';
+  form.timezone = 'Asia/Shanghai';
   if (!form.projectId && projectOptions.value[0]) {
     form.projectId = projectOptions.value[0].value;
   }
@@ -322,7 +392,7 @@ async function edit(row: any) {
   editingId.value = row.id;
   form.projectId = row.projectId;
   await loadProjectChannels(row.projectId);
-  Object.assign(form, { channelType: row.channelType, title: row.title || '', content: row.content || '', runAt: new Date(row.runAt).getTime(), daily: row.cron === 'daily' });
+  Object.assign(form, { channelType: row.channelType, title: row.title || '', content: row.content || '', runAt: new Date(row.runAt).getTime(), cron: row.cron || '', timezone: row.timezone || 'Asia/Shanghai' });
   showCreate.value = true;
 }
 async function togglePause(row: any) {
@@ -367,7 +437,8 @@ async function create() {
       title: form.title,
       content: form.content,
       runAt: new Date(form.runAt).toISOString(),
-      cron: form.daily ? 'daily' : null,
+      cron: form.cron || null,
+      timezone: form.timezone.trim() || 'Asia/Shanghai',
     };
     if (editingId.value) {
       const { channelType, ...editable } = data;

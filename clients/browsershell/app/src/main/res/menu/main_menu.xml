@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_new_tab"
+        android:title="@string/menu_new_tab"
+        app:showAsAction="ifRoom" />
+    <item
+        android:id="@+id/action_close_tab"
+        android:title="@string/menu_close_tab"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_bookmark"
+        android:title="@string/menu_bookmark"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_bookmarks"
+        android:title="@string/menu_bookmarks"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_history"
+        android:title="@string/menu_history"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_scripts"
+        android:title="@string/menu_scripts"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_sniffer"
+        android:title="@string/menu_sniffer"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_network"
+        android:title="@string/menu_network"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_qr"
+        android:title="@string/menu_qr"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_adblock"
+        android:checkable="true"
+        android:checked="true"
+        android:title="@string/menu_adblock"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_update_filters"
+        android:title="@string/menu_update_filters"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_desktop"
+        android:checkable="true"
+        android:title="@string/menu_desktop"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_debug"
+        android:checkable="true"
+        android:title="@string/menu_debug"
+        app:showAsAction="never" />
+</menu>

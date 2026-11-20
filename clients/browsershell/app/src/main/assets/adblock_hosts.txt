@@ -1,0 +1,6 @@
+# Extra hosts (one per line). Loaded at startup.
+# Keep this file small for MVP; swap for EasyList subset later.
+ads.pubmatic.com
+securepubads.g.doubleclick.net
+static.ads-twitter.com
+ads.linkedin.com

@@ -42,15 +42,33 @@ test('cancel cannot overwrite an already running task', async () => {
 
 test('overdue daily task skips missed occurrences', async () => {
   const { SchedulesService } = load('schedules/schedules.service');
-  const row = { id: 's1', status: 'PENDING', projectId: 'p1', kind: 'push', cron: 'daily', runAt: new Date(Date.now() - 4 * 86400000), variables: {} };
-  const service = new SchedulesService({ scheduledMessage: {
+  const row = { id: 's1', status: 'PENDING', projectId: 'p1', kind: 'push', cron: 'daily', timezone: 'Asia/Shanghai', runAt: new Date(Date.now() - 4 * 86400000), variables: {} };
+  const executions = [];
+  let sends = 0;
+  const prisma = { scheduledMessage: {
     findUnique: async () => ({ ...row }),
-    updateMany: async ({ data }) => { Object.assign(row, data); return { count: 1 }; },
-    update: async ({ data }) => Object.assign(row, data),
-  } }, { sendPush: async () => ({ success: true }) });
+    updateMany: async ({ where, data }) => {
+      if (!Object.entries(where).every(([key, value]) => row[key] === value)) return { count: 0 };
+      for (const [key, value] of Object.entries(data)) row[key] = value?.increment ? (row[key] || 0) + value.increment : value;
+      return { count: 1 };
+    },
+  }, scheduleExecution: {
+    create: async ({ data }) => { executions.push({ ...data }); return { ...data }; },
+    updateMany: async ({ where, data }) => {
+      let count = 0;
+      for (const execution of executions) if (Object.entries(where).every(([key, value]) => execution[key] === value)) { Object.assign(execution, data); count++; }
+      return { count };
+    },
+  } };
+  prisma.$transaction = async fn => fn(prisma);
+  const service = new SchedulesService(prisma, { sendPush: async () => { sends++; return { success: true, messageId: 'm1' }; } });
   await service.executeOne('s1');
   assert.equal(row.status, 'PENDING');
   assert.ok(row.runAt.getTime() > Date.now());
+  assert.equal(sends, 1);
+  assert.equal(executions.length, 1);
+  assert.equal(executions[0].status, 'SUCCESS');
+  assert.equal(executions[0].messageId, 'm1');
 });
 
 test('template required variables include blocks and nested paths', () => {
@@ -65,12 +83,20 @@ test('template required variables include blocks and nested paths', () => {
 test('expired running schedules become auditable uncertainty, never auto resend', async () => {
   const { SchedulesService } = load('schedules/schedules.service');
   const row = { id: 's1', status: 'RUNNING', leaseUntil: new Date(0) };
+  const execution = { id: 'expired-1', scheduleId: 's1', status: 'RUNNING' };
   const service = new SchedulesService({ scheduledMessage: {
     updateMany: async ({ where, data }) => { if (where.status === row.status) Object.assign(row, data); return { count: 1 }; },
     findMany: async () => [],
+  }, scheduleExecution: {
+    updateMany: async ({ where, data }) => {
+      if (execution.status !== where.status || row.status !== where.schedule.status) return { count: 0 };
+      Object.assign(execution, data); return { count: 1 };
+    },
   } }, {});
   await service.tick();
   assert.equal(row.status, 'UNCERTAIN');
+  assert.equal(execution.status, 'UNCERTAIN');
+  assert.ok(execution.finishedAt instanceof Date);
 });
 
 test('quota reservation serializes admission and log creation', async () => {

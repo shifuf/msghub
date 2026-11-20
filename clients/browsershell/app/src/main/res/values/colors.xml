@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="via_bg">#FFF2F2F7</color>
+    <color name="via_chrome">#FFFFFFFF</color>
+    <color name="via_chrome_border">#FFDCDCE2</color>
+    <color name="via_text">#FF1C1C1E</color>
+    <color name="via_text_secondary">#FF636369</color>
+    <color name="via_accent">#FF007AFF</color>
+    <color name="via_accent_soft">#14007AFF</color>
+    <color name="via_icon">#FF3A3A3C</color>
+    <color name="via_icon_disabled">#FF9CA3AF</color>
+    <color name="via_url_bg">#FFE9E9EF</color>
+    <color name="via_divider">#14000000</color>
+    <color name="via_tab_active">#FF007AFF</color>
+    <color name="via_tab_inactive">#FFEEF1F5</color>
+    <color name="via_ripple">#1A000000</color>
+    <color name="via_progress">#FF007AFF</color>
+    <color name="via_status_bar">#FFF2F2F7</color>
+    <color name="via_sheet_scrim">#66000000</color>
+    <color name="via_card">#FFFFFFFF</color>
+    <color name="via_menu_icon_bg">#FFF3F4F6</color>
+    <color name="via_danger">#FFDC3035</color>
+    <color name="via_input_text">#FF1C1C1E</color>
+    <color name="via_input_hint">#FF74747B</color>
+    <color name="via_input_bg">#FFF2F2F7</color>
+</resources>

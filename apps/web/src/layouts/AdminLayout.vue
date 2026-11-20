@@ -30,7 +30,7 @@
 
       <div class="sider-footer" v-if="isMobile || !collapsed">
         <div class="footer-chip">
-          v1.4 · 单用户 ·
+          消息平台 ·
           <span :class="notify.connected ? 'live-on' : 'live-off'">
             {{ notify.connected ? 'SSE 已连接' : '轮询备用' }}
           </span>
@@ -172,7 +172,7 @@ const notify = useNotifyStore();
 const ntf = useNotification();
 const message = useMessage();
 
-const menuOptions = [
+const menuOptions = computed(() => [
   { label: '仪表盘', key: 'dashboard', icon: renderIcon(Icons.home, 20) },
   { label: '项目管理', key: 'projects', icon: renderIcon(Icons.folder, 20) },
   { label: '渠道管理', key: 'channels', icon: renderIcon(Icons.network, 20) },
@@ -180,6 +180,8 @@ const menuOptions = [
   { label: '推送模板', key: 'push-templates', icon: renderIcon(Icons.document, 20) },
   { label: '事件目录', key: 'events', icon: renderIcon(Icons.flash, 20) },
   { label: '发送记录', key: 'messages', icon: renderIcon(Icons.list, 20) },
+  { label: () => h('span', { class: 'flex items-center justify-between gap-2' }, [h('span', '会话收件箱'), h(NBadge, { value: notify.conversationUnread || 0, max: 99, showZero: false })]), key: 'conversations', icon: renderIcon(Icons.chat, 20) },
+  { label: '推送设备', key: 'devices', icon: renderIcon(Icons.chip, 20) },
   { label: '设备推送', key: 'device-push', icon: renderIcon(Icons.network, 20) },
   { label: '抑制名单', key: 'suppress', icon: renderIcon(Icons.mail, 20) },
   { label: '定时发送', key: 'schedules', icon: renderIcon(Icons.time, 20) },
@@ -187,7 +189,8 @@ const menuOptions = [
   { label: '操作日志', key: 'activity', icon: renderIcon(Icons.list, 20) },
   { label: '合作站', key: 'partners', icon: renderIcon(Icons.link, 20) },
   { label: '系统设置', key: 'settings', icon: renderIcon(Icons.settings, 20) },
-];
+  { label: '运行维护', key: 'operations', icon: renderIcon(Icons.server, 20) },
+]);
 
 const activeKey = computed(() => {
   const name = String(route.name || '');
@@ -197,6 +200,9 @@ const activeKey = computed(() => {
   if (name === 'push-templates') return 'push-templates';
   if (name === 'events') return 'events';
   if (name === 'messages') return 'messages';
+  if (name === 'conversations') return 'conversations';
+  if (name === 'devices') return 'devices';
+  if (name === 'operations') return 'operations';
   if (name === 'device-push') return 'device-push';
   if (name === 'suppress') return 'suppress';
   if (name === 'schedules') return 'schedules';
@@ -219,6 +225,9 @@ const pageTitle = computed(() => {
     'push-templates': '推送模板',
     events: '事件目录',
     messages: '发送记录',
+    conversations: '会话收件箱',
+    devices: '推送设备',
+    operations: '运行维护',
     'device-push': '设备推送',
     suppress: '抑制名单',
     schedules: '定时发送',
@@ -241,6 +250,9 @@ function onMenu(key: string) {
     'push-templates': '/push-templates',
     events: '/events',
     messages: '/messages',
+    conversations: '/conversations',
+    devices: '/devices',
+    operations: '/operations',
     'device-push': '/device-push',
     suppress: '/suppress',
     schedules: '/schedules',

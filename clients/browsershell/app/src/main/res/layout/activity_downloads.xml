@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/via_bg"
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
+
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/toolbar"
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="@color/via_bg"
+        app:navigationIconTint="@color/via_icon"
+        app:titleTextColor="@color/via_text" />
+
+    <include layout="@layout/include_page_header" />
+
+    <EditText android:id="@+id/searchBox" style="@style/PrismSearch" android:hint="搜索文件名或下载链接" />
+
+    <HorizontalScrollView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:paddingHorizontal="12dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="6dp"
+        android:scrollbars="none">
+
+        <com.google.android.material.chip.ChipGroup
+            android:id="@+id/filterChips"
+            app:singleLine="true"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            app:selectionRequired="true"
+            app:singleSelection="true" />
+    </HorizontalScrollView>
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <TextView android:id="@+id/emptyView" android:layout_width="match_parent" android:layout_height="match_parent"
+            android:padding="32dp" android:gravity="center" android:lineSpacingExtra="5dp"
+            android:text="暂无下载" android:textColor="@color/via_text_secondary" />
+
+        <androidx.recyclerview.widget.RecyclerView
+            android:id="@+id/recycler"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clipToPadding="false"
+            android:paddingBottom="72dp" />
+    </FrameLayout>
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:minHeight="64dp"
+        android:background="@color/via_chrome"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp">
+
+        <TextView
+            android:id="@+id/btnNewDownload"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:paddingVertical="10dp"
+            android:minWidth="48dp"
+            android:paddingHorizontal="12dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="新建下载"
+            android:drawableStart="@drawable/ic_add"
+            android:drawableTint="@color/via_accent"
+            android:drawablePadding="8dp"
+            android:textColor="@color/via_accent"
+            android:textSize="15sp" />
+
+
+
+        <TextView
+            android:id="@+id/btnEditDownloads"
+            android:layout_width="0dp"
+            android:layout_weight="1"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp"
+            android:paddingVertical="10dp"
+            android:minWidth="48dp"
+            android:paddingHorizontal="12dp"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:text="下载选项"
+            android:textColor="@color/via_accent"
+            android:textSize="15sp" />
+    </LinearLayout>
+</LinearLayout>

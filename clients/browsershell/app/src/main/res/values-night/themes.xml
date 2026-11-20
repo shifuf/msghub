@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Prism" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/via_accent</item>
+        <item name="colorPrimaryVariant">@color/via_accent</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="colorSecondary">@color/via_accent</item>
+        <item name="colorSurface">@color/via_card</item>
+        <item name="colorOnSurface">@color/via_text</item>
+        <item name="android:colorBackground">@color/via_bg</item>
+        <item name="android:statusBarColor">@color/via_status_bar</item>
+        <item name="android:navigationBarColor">@color/via_chrome</item>
+        <item name="android:windowBackground">@color/via_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:textColorPrimary">@color/via_text</item>
+        <item name="android:textColorSecondary">@color/via_text_secondary</item>
+        <item name="popupMenuStyle">@style/ViaPopupMenu</item>
+        <item name="alertDialogTheme">@style/ViaAlertDialog</item>
+        <item name="materialAlertDialogTheme">@style/ViaAlertDialog</item>
+        <item name="shapeAppearanceSmallComponent">@style/ViaShapeSmall</item>
+        <item name="shapeAppearanceMediumComponent">@style/ViaShapeMedium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ViaShapeLarge</item>
+        <item name="buttonStyle">@style/ViaButton</item>
+        <item name="materialButtonStyle">@style/ViaButton</item>
+    </style>
+</resources>

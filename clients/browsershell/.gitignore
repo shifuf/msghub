@@ -1,0 +1,36 @@
+# Local secrets / signing
+keystore.properties
+jpush.properties
+*.jks
+*.keystore
+*.p12
+
+# Local SDK path
+local.properties
+
+# Build
+.gradle/
+build/
+app/build/
+**/build/
+.cxx/
+captures/
+*.apk
+*.ap_
+*.aab
+*.dex
+*.class
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs / old package backup
+*.log
+_old_package_com_browser/

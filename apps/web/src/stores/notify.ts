@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
-import { dashboardApi, messagesApi, realtimeApi } from '@/api';
+import { conversationsApi, dashboardApi, messagesApi, realtimeApi } from '@/api';
 import { useAuthStore } from './auth';
 
 export type NotifyItem = {
@@ -10,6 +10,18 @@ export type NotifyItem = {
   channel?: { id: string; name: string; type: string } | null; read?: boolean;
 };
 
+export type ConversationEventData = {
+  kind: 'reply' | 'read' | 'status';
+  messageId: string;
+  replyId?: string;
+  author?: 'admin' | 'device';
+  reader?: 'admin' | 'device';
+  count?: number;
+  status?: 'open' | 'closed';
+  createdAt?: string;
+  deliveryStatus?: string;
+};
+
 export const useNotifyStore = defineStore('notify', () => {
   const items = ref<NotifyItem[]>([]);
   const pending = ref(0);
@@ -17,6 +29,8 @@ export const useNotifyStore = defineStore('notify', () => {
   const connected = ref(false);
   const freshQueue = ref<NotifyItem[]>([]);
   const serverUnread = ref<number | null>(null);
+  const conversationUnread = ref<number | null>(null);
+  const conversationEvent = ref<(ConversationEventData & { sequence: number }) | null>(null);
   const unreadCount = computed(() => serverUnread.value ?? items.value.filter(i => !i.read).length);
   let es: EventSource | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -26,6 +40,29 @@ export const useNotifyStore = defineStore('notify', () => {
   let generation = 0;
   let syncing: Promise<void> | null = null;
   const seenTransitions = new Map<string, string>();
+  let conversationSequence = 0;
+  let conversationSyncTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function refreshConversationUnread() {
+    const current = generation;
+    try {
+      const data: any = await conversationsApi.list({ status: 'all', page: 1, pageSize: 1 });
+      if (current !== generation) return;
+      if (typeof data.unreadCount === 'number') conversationUnread.value = data.unreadCount;
+    } catch { /* Keep the last known count; periodic sync recovers after reconnect. */ }
+  }
+
+  function handleConversationEvent(value: unknown) {
+    if (!value || typeof value !== 'object') return;
+    const data = value as ConversationEventData;
+    if (!data.messageId || !['reply', 'read', 'status'].includes(data.kind)) return;
+    conversationEvent.value = { ...data, sequence: ++conversationSequence };
+    if (conversationSyncTimer) clearTimeout(conversationSyncTimer);
+    conversationSyncTimer = setTimeout(() => {
+      conversationSyncTimer = null;
+      void refreshConversationUnread();
+    }, 200);
+  }
 
   function alert(item: NotifyItem) {
     freshQueue.value = [...freshQueue.value, { ...item }];
@@ -72,6 +109,7 @@ export const useNotifyStore = defineStore('notify', () => {
     cursor = data.nextCursor;
     since = data.serverTime;
     counts(data);
+    await refreshConversationUnread();
   }
 
   function synchronize() {
@@ -92,6 +130,7 @@ export const useNotifyStore = defineStore('notify', () => {
         cursor = data.nextCursor || undefined;
         if (!more && watermark) since = new Date(new Date(watermark).getTime() - 1000).toISOString();
       }
+      if (current === generation) await refreshConversationUnread();
     })().finally(() => { syncing = null; });
     return syncing;
   }
@@ -116,6 +155,7 @@ export const useNotifyStore = defineStore('notify', () => {
         try {
           const payload = JSON.parse((event as MessageEvent).data);
           if (payload.type === 'message') upsertMessage(payload.data, true);
+          else if (payload.type === 'conversation') handleConversationEvent(payload.data);
         } catch { /* Polling reconciles malformed or missed events. */ }
       });
       source.onopen = async () => {
@@ -159,7 +199,9 @@ export const useNotifyStore = defineStore('notify', () => {
     if (reconnectTimer) clearTimeout(reconnectTimer);
     pollTimer = null; reconnectTimer = null; syncing = null;
     cursor = undefined; since = undefined; freshQueue.value = []; seenTransitions.clear();
-    items.value = []; serverUnread.value = null;
+    if (conversationSyncTimer) clearTimeout(conversationSyncTimer);
+    conversationSyncTimer = null;
+    items.value = []; serverUnread.value = null; conversationUnread.value = null; conversationEvent.value = null;
   }
-  return { items, pending, failed24h, unreadCount, connected, freshQueue, consumeFresh, markRead, markAllRead, start, stop, bootstrap };
+  return { items, pending, failed24h, unreadCount, conversationUnread, conversationEvent, connected, freshQueue, consumeFresh, markRead, markAllRead, start, stop, bootstrap, refreshConversationUnread };
 });

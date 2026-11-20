@@ -36,6 +36,7 @@ import {
   resolveUnsubscribeSecret,
   signUnsubscribeToken,
   signReadToken,
+  signConversationToken,
 } from '../common/token.util';
 import {
   resolveAsyncSend,
@@ -43,6 +44,8 @@ import {
   resolveSiteUrl,
   isProduction,
 } from '../common/env';
+import { snapshotJpushTarget, withoutConversationToken } from '../adapters/jpush-audience';
+import { addDeviceReceiptTokens } from '../adapters/jpush-receipts';
 
 export type MessageListQuery = {
   projectId?: string;
@@ -360,14 +363,22 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
     messageId: string,
     extra?: Record<string, unknown>,
   ): Record<string, unknown> {
-    const base = { ...(extra || {}) };
+    let base = withoutConversationToken(extra || {});
     base.messageId = messageId;
+    delete base.conversationId;
+    delete base.conversationToken;
+    delete base.replyId;
     try {
       const secret = resolveUnsubscribeSecret(
         this.config.get('UNSUBSCRIBE_SECRET') || this.config.get('JWT_SECRET'),
         { allowDevFallback: true },
       );
       base.readToken = signReadToken(messageId, secret);
+      if (base._jpushAudience && base._jpushAppKey) {
+        base.conversationId = messageId;
+        base.conversationToken = signConversationToken(messageId, secret);
+        base = addDeviceReceiptTokens(messageId, base, secret);
+      }
     } catch {
       /* 未配置密钥时不注入，公开已读接口会 503 */
     }
@@ -395,6 +406,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
     priority?: MessagePriority;
     eventCode?: string;
     dedupeKey?: string;
+    jpushTarget?: { audience: unknown; appKey: unknown };
   }) {
     const tried = Array.from(
       new Set([...(opts.triedChannelIds || []), opts.channelId].filter(Boolean)),
@@ -412,19 +424,11 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
           where: { id: opts.channelId },
         });
         const cfg = (ch?.config || {}) as Record<string, unknown>;
-        const ridFromExtra =
-          typeof pushExtra?.registrationId === 'string'
-            ? String(pushExtra.registrationId).trim()
-            : '';
-        const ridFromCfg =
-          typeof cfg.registrationId === 'string'
-            ? String(cfg.registrationId).trim()
-            : '';
-        const rid = ridFromExtra || ridFromCfg;
-        if (rid) {
-          toAddress = toAddress || rid.split(/[,;\s]+/).filter(Boolean)[0] || rid;
-          pushExtra = { ...(pushExtra || {}), registrationId: rid };
-        }
+        pushExtra = opts.jpushTarget
+          ? { ...(pushExtra || {}), _jpushAudience: opts.jpushTarget.audience, _jpushAppKey: opts.jpushTarget.appKey }
+          : snapshotJpushTarget(cfg, pushExtra);
+        const target = pushExtra._jpushAudience as any;
+        toAddress = target?.registration_id?.[0] || target?.alias?.[0] || undefined;
       } catch {
         /* ignore */
       }
@@ -445,7 +449,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
           content: opts.content,
           html: opts.html,
           to: toAddress,
-          extra: pushExtra || opts.extra,
+          extra: withoutConversationToken(pushExtra || opts.extra || {}),
           // 异步队列失败兜底时用
           _failover: {
             triedChannelIds: tried,
@@ -482,6 +486,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
         data: {
           payload: {
             ...payload,
+            extra: withoutConversationToken(enrichedExtra || {}),
             _deliveryMode: this.asyncEnabled && !opts.forceSync ? 'queue' : 'sync',
             _failover: {
               triedChannelIds: tried,
@@ -508,6 +513,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
             channelType: opts.channelType,
             payload: {
               ...payload,
+              extra: withoutConversationToken(payload.extra || {}),
               _failover: {
                 triedChannelIds: tried,
                 kind: opts.kind,
@@ -567,6 +573,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
       where: { id: log.id },
       data: {
         status: result.success ? MessageStatus.SUCCESS : MessageStatus.FAILED,
+        providerAcceptedAt: result.success && channel.type !== ChannelType.INBOX ? new Date() : null,
         response: result.response as any,
         errorMessage: sanitizeErrorMessage(result.errorMessage),
         durationMs,
@@ -1520,6 +1527,20 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
       });
     }
 
+    if (original.channelType === ChannelType.JPUSH && payload.extra?._jpushAudience && payload.extra?._jpushAppKey) {
+      const project = await this.prisma.project.findUnique({ where: { id: original.projectId }, select: { enabled: true } });
+      if (!project?.enabled) throw new BadRequestException('项目不存在或已禁用');
+      await this.channels.resolveChannel(original.projectId, { channelId: original.channelId });
+      return this.enqueueOrSend({
+        kind: 'push', projectId: original.projectId, channelId: original.channelId,
+        channelType: ChannelType.JPUSH, source: MessageSource.RESEND,
+        title: original.title || payload.title, content: payload.content || original.content || undefined,
+        html: payload.html, extra: withoutConversationToken(payload.extra),
+        jpushTarget: { audience: payload.extra._jpushAudience, appKey: payload.extra._jpushAppKey },
+        forceSync: true, parentId: original.id,
+      });
+    }
+
     return this.sendPush({
       projectId: original.projectId,
       source: MessageSource.RESEND,
@@ -2024,6 +2045,10 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
     where.AND = [
       ...(Array.isArray(where.AND) ? where.AND : where.AND ? [where.AND] : []),
       { OR: [{ errorMessage: null }, { NOT: { errorMessage: { startsWith: 'DELIVERY_UNKNOWN:' } } }] },
+      // A notification is the durable root of its replies. Closing a thread
+      // permits retention only after every provider submission is resolved.
+      { OR: [{ conversationActivityAt: null }, { conversationClosedAt: { not: null } }] },
+      { replies: { none: { deliveryStatus: { in: ['PENDING', 'UNCERTAIN'] } } } },
     ];
   }
 
@@ -2094,7 +2119,10 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
     if (opts.projectId) where.projectId = opts.projectId;
     if (opts.unreadOnly) where.readAt = null;
     if (rid) {
-      where.toAddress = { contains: rid, mode: 'insensitive' };
+      where.OR = [
+        { payload: { path: ['extra', '_jpushAudience', 'registration_id'], array_contains: [rid] } },
+        { toAddress: rid },
+      ];
     }
     if (opts.q?.trim()) {
       const q = opts.q.trim();
@@ -2121,6 +2149,7 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
         include: {
           project: { select: { id: true, name: true } },
           channel: { select: { id: true, name: true, type: true, config: true } },
+          deviceReceipts: { ...(rid ? { where: { registrationId: rid } } : {}), select: { registrationId: true, arrivedAt: true, displayedAt: true } },
         },
       }),
     ]);
@@ -2128,11 +2157,14 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
     const mapped = items.map((m) => {
       const payload = (m.payload || {}) as any;
       const extra = (payload.extra || {}) as Record<string, unknown>;
-      const cfg = (m.channel?.config || {}) as Record<string, unknown>;
+      const originalTargets = (extra._jpushAudience as any)?.registration_id;
+      const targetIds: string[] = Array.isArray(originalTargets) ? [...new Set(originalTargets.filter((value: unknown): value is string => typeof value === 'string'))] : [];
+      const receipts = m.deviceReceipts || [];
+      const targetReceipt = rid ? receipts.find(receipt => receipt.registrationId === rid) : undefined;
       const registrationId =
+        rid || targetIds.join(',') ||
         (typeof extra.registrationId === 'string' && extra.registrationId) ||
         m.toAddress ||
-        (typeof cfg.registrationId === 'string' && cfg.registrationId) ||
         null;
       const fb = this.parseEmailFallback(payload);
       const unread = !m.readAt;
@@ -2151,6 +2183,13 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
         title: m.title,
         content: m.content,
         registrationId,
+        providerAcceptedAt: m.providerAcceptedAt || null,
+        deviceReceivedAt: rid ? targetReceipt?.arrivedAt || null : m.deviceReceivedAt || null,
+        deviceDisplayedAt: rid ? targetReceipt?.displayedAt || null : m.deviceDisplayedAt || null,
+        targetDeviceCount: rid ? 1 : targetIds.length || null,
+        receivedDeviceCount: receipts.length,
+        displayedDeviceCount: receipts.filter(receipt => receipt.displayedAt).length,
+        receiptSupport: typeof extra._deviceReceiptMode === 'string' ? extra._deviceReceiptMode : 'unknown',
         readAt: m.readAt,
         createdAt: m.createdAt,
         updatedAt: m.updatedAt,
@@ -2310,6 +2349,11 @@ export class MessagesService implements OnModuleInit, OnModuleDestroy {
       }
       const started = Date.now();
       try {
+        if (ch.type === ChannelType.JPUSH) {
+          const result = await this.enqueueOrSend({ kind: 'push', projectId, channelId: ch.id, channelType: ChannelType.JPUSH, source: MessageSource.ADMIN_TEST, title, content, forceSync: true, skipFailover: true });
+          results.push({ channelId: ch.id, type: ch.type, name: ch.name, ok: !!result.success, ms: Date.now() - started, error: 'errorMessage' in result ? result.errorMessage : null, messageId: result.messageId });
+          continue;
+        }
         const adapter = this.adapters.get(ch.type as ChannelType);
         const cfg = (ch.config || {}) as Record<string, unknown>;
         // SMTP test 走 adapter.test；其它也用 test

@@ -11,6 +11,8 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MessagesService } from '../messages/messages.service';
 import { randomUUID } from 'crypto';
 import { DeliveryUncertainError } from '../common/delivery.util';
+import { DEFAULT_SCHEDULE_TIMEZONE, nextScheduleRun, validateScheduleRule, validateScheduleTimezone } from './recurrence';
+import { sanitizeErrorMessage } from '../common/utils';
 
 @Injectable()
 export class SchedulesService implements OnModuleInit, OnModuleDestroy {
@@ -63,6 +65,18 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     return row;
   }
 
+  async history(id: string, query: { page?: number; pageSize?: number } = {}) {
+    await this.get(id);
+    const page = Math.max(1, Math.floor(Number(query.page) || 1));
+    const pageSize = Math.min(100, Math.max(1, Math.floor(Number(query.pageSize) || 20)));
+    const where = { scheduleId: id };
+    const [items, total] = await Promise.all([
+      this.prisma.scheduleExecution.findMany({ where, orderBy: [{ startedAt: 'desc' }, { id: 'desc' }], skip: (page - 1) * pageSize, take: pageSize }),
+      this.prisma.scheduleExecution.count({ where }),
+    ]);
+    return { items, total, page, pageSize };
+  }
+
   async create(data: {
     projectId: string;
     channelId?: string;
@@ -76,9 +90,11 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     variables?: Record<string, unknown>;
     runAt: string | Date;
     cron?: string;
+    timezone?: string;
   }) {
     if (!data.projectId) throw new BadRequestException('缺少 projectId');
-    if (data.cron && data.cron !== 'daily') throw new BadRequestException('当前仅支持 daily 重复规则');
+    validateScheduleTimezone(data.timezone ?? DEFAULT_SCHEDULE_TIMEZONE);
+    validateScheduleRule(data.cron);
     if (data.variables && ['quietRelease', 'unreadEmailFallback', 'sourceMessageId', 'inboxMessageId'].some((key) => key in data.variables!)) throw new BadRequestException('variables 含内部任务保留字段');
     if (data.kind && !['push', 'email'].includes(data.kind)) throw new BadRequestException('任务 kind 无效');
     const runAt = new Date(data.runAt);
@@ -110,6 +126,7 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
         variables: (data.variables || null) as any,
         runAt,
         cron: data.cron || null,
+        timezone: data.timezone ?? DEFAULT_SCHEDULE_TIMEZONE,
         status: 'PENDING',
       },
       include: { project: { select: { id: true, name: true } } },
@@ -129,9 +146,10 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
     return this.get(id);
   }
 
-  async update(id: string, data: { title?: string; content?: string; html?: string; runAt?: string; cron?: string; variables?: Record<string, unknown> }) {
+  async update(id: string, data: { title?: string; content?: string; html?: string; runAt?: string; cron?: string; timezone?: string; variables?: Record<string, unknown> }) {
     if (data.variables && ['quietRelease', 'unreadEmailFallback', 'sourceMessageId', 'inboxMessageId'].some((key) => key in data.variables!)) throw new BadRequestException('variables 含内部任务保留字段');
-    if (data.cron && data.cron !== 'daily') throw new BadRequestException('当前仅支持 daily 重复规则');
+    validateScheduleRule(data.cron);
+    if (data.timezone !== undefined) validateScheduleTimezone(data.timezone);
     const runAt = data.runAt === undefined ? undefined : new Date(data.runAt);
     if (runAt && !Number.isFinite(runAt.getTime())) throw new BadRequestException('runAt 无效');
     const changed = await this.prisma.scheduledMessage.updateMany({ where: { id, status: { in: ['PENDING', 'PAUSED'] } }, data: { ...data, variables: data.variables as any, runAt } });
@@ -154,10 +172,13 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
   async resolve(id: string, data: { action: 'delivered' | 'retry'; acknowledgeDuplicateRisk?: boolean }) {
     if (!['delivered', 'retry'].includes(data.action)) throw new BadRequestException('无效处理操作');
     if (data.action === 'retry' && data.acknowledgeDuplicateRisk !== true) throw new BadRequestException('重试可能重复发送，须明确确认重复风险');
+    const row = await this.get(id);
+    const next = data.action === 'delivered' && row.cron && row.kind !== 'unread_email_fallback'
+      ? nextScheduleRun(row.runAt, row.cron, row.timezone || DEFAULT_SCHEDULE_TIMEZONE) : null;
     const changed = await this.prisma.scheduledMessage.updateMany({
       where: { id, status: 'UNCERTAIN' },
-      data: { status: data.action === 'delivered' ? 'SUCCESS' : 'PENDING', leaseUntil: null, executionKey: null,
-        ...(data.action === 'retry' ? { runAt: new Date() } : {}),
+      data: { status: data.action === 'delivered' && !next ? 'SUCCESS' : 'PENDING', leaseUntil: null, executionKey: null,
+        ...(data.action === 'retry' ? { runAt: new Date() } : next ? { runAt: next } : {}),
         lastError: data.action === 'delivered' ? '管理员核实已送达' : '管理员确认重复风险后重试' },
     });
     if (!changed.count) throw new BadRequestException('仅结果待核实任务可处理，状态可能已变更');
@@ -171,6 +192,10 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
       await this.prisma.scheduledMessage.updateMany({
         where: { status: 'RUNNING', OR: [{ leaseUntil: { lt: new Date() } }, { leaseUntil: null }] } as any,
         data: { status: 'UNCERTAIN', lastError: '执行租约过期；外部送达结果未知，请核实后手动重建任务', leaseUntil: null } as any,
+      });
+      await this.prisma.scheduleExecution.updateMany({
+        where: { status: 'RUNNING', schedule: { status: 'UNCERTAIN' } },
+        data: { status: 'UNCERTAIN', finishedAt: new Date(), error: '执行租约过期；外部送达结果未知，等待人工核实' },
       });
       const due = await this.prisma.scheduledMessage.findMany({
         where: {
@@ -192,14 +217,16 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
 
   private async executeOne(id: string) {
     const executionKey = randomUUID();
-    // 乐观锁：仅 PENDING 可领取
-    const claimed = await this.prisma.scheduledMessage.updateMany({
-      where: { id, status: 'PENDING' },
-      data: { status: 'RUNNING', executionKey, leaseUntil: new Date(Date.now() + 120_000), attempt: { increment: 1 } } as any,
+    const item = await this.prisma.$transaction(async db => {
+      const claimed = await db.scheduledMessage.updateMany({
+        where: { id, status: 'PENDING' },
+        data: { status: 'RUNNING', executionKey, leaseUntil: new Date(Date.now() + 120_000), attempt: { increment: 1 } },
+      });
+      if (!claimed.count) return null;
+      const scheduled = await db.scheduledMessage.findUnique({ where: { id } });
+      if (scheduled) await db.scheduleExecution.create({ data: { id: executionKey, scheduleId: id, startedAt: new Date(), status: 'RUNNING' } });
+      return scheduled;
     });
-    if (claimed.count === 0) return;
-
-    const item = await this.prisma.scheduledMessage.findUnique({ where: { id } });
     if (!item) return;
     const heartbeat = setInterval(() => {
       void this.prisma.scheduledMessage.updateMany({
@@ -283,57 +310,33 @@ export class SchedulesService implements OnModuleInit, OnModuleDestroy {
       }
 
       deliveryReturned = true;
-      const skipped = !!(result as any)?.skipped;
-      const success =
-        skipped ||
-        (result?.success !== false && result?.status !== 'FAILED');
-      if (success && item.cron && item.kind !== 'unread_email_fallback') {
-        // 简化：cron 非空 → 每日同一时刻重排
-        const day = 24 * 60 * 60 * 1000;
-        const missed = Math.max(1, Math.floor((Date.now() - item.runAt.getTime()) / day) + 1);
-        const nextRunAt = new Date(item.runAt.getTime() + missed * day);
-        await this.prisma.scheduledMessage.updateMany({
-          where: { id, status: 'RUNNING', executionKey } as any,
-          data: {
-            status: 'PENDING',
-            runAt: nextRunAt,
-            messageId: result?.messageId || item.messageId || null,
-            lastError: null,
-          },
-        });
-        this.logger.log(`schedule ${id} success, requeued daily at ${nextRunAt.toISOString()}`);
-      } else if (success) {
-        await this.prisma.scheduledMessage.updateMany({
-          where: { id, status: 'RUNNING', executionKey } as any,
-          data: {
-            status: skipped ? 'CANCELLED' : 'SUCCESS',
-            messageId: result?.messageId || item.messageId || null,
-            lastError: skipped
-              ? String((result as any)?.reason || 'skipped')
-              : null,
-          },
-        });
-      } else {
-        await this.prisma.scheduledMessage.updateMany({
-          where: { id, status: 'RUNNING', executionKey } as any,
-          data: {
-            status: 'FAILED',
-            messageId: result?.messageId || item.messageId || null,
-            lastError: result?.errorMessage || '发送失败',
-          },
-        });
-      }
+      const skipped = !!result?.skipped;
+      const uncertain = ['UNCERTAIN', 'DELIVERY_UNKNOWN', 'UNKNOWN'].includes(String(result?.status)) || result?.deliveryVerified === false && result?.status === 'UNKNOWN';
+      const success = skipped || result?.success !== false && result?.status !== 'FAILED';
+      const status = uncertain ? 'UNCERTAIN' : skipped ? 'CANCELLED' : success ? 'SUCCESS' : 'FAILED';
+      await this.finishExecution(item, executionKey, status, result?.messageId || null, uncertain ? '外部送达结果未知，等待人工核实' : skipped ? String(result?.reason || 'skipped') : success ? null : result?.errorMessage || '发送失败');
     } catch (e: any) {
-      await this.prisma.scheduledMessage.updateMany({
-        where: { id, status: 'RUNNING', executionKey } as any,
-        data: {
-          status: deliveryReturned || e instanceof DeliveryUncertainError ? 'UNCERTAIN' : 'FAILED',
-          lastError: e?.message || String(e),
-        },
-      });
+      await this.finishExecution(item, executionKey, deliveryReturned || e instanceof DeliveryUncertainError ? 'UNCERTAIN' : 'FAILED', e instanceof DeliveryUncertainError ? e.messageId : null, e?.message || String(e));
       this.logger.warn(`schedule ${id} failed: ${e?.message || e}`);
     } finally {
       clearInterval(heartbeat);
     }
+  }
+
+  private async finishExecution(item: any, executionKey: string, status: string, messageId: string | null, error: string | null) {
+    const safeError = error ? sanitizeErrorMessage(error) : null;
+    const next = status !== 'UNCERTAIN' && item.cron && item.kind !== 'unread_email_fallback'
+      ? nextScheduleRun(item.runAt, item.cron, item.timezone || DEFAULT_SCHEDULE_TIMEZONE) : null;
+    await this.prisma.$transaction(async db => {
+      const changed = await db.scheduledMessage.updateMany({
+        where: { id: item.id, status: 'RUNNING', executionKey },
+        data: { status: next ? 'PENDING' : status, ...(next ? { runAt: next } : {}), messageId, lastError: safeError, leaseUntil: null, executionKey: null },
+      });
+      // Lease loss means another ticker already recorded uncertainty; never overwrite it.
+      if (changed.count) await db.scheduleExecution.updateMany({
+        where: { id: executionKey, status: 'RUNNING' },
+        data: { status, messageId, error: safeError, finishedAt: new Date() },
+      });
+    });
   }
 }

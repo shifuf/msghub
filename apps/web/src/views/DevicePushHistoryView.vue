@@ -4,7 +4,7 @@
       <div>
         <div class="page-title">设备推送历史</div>
         <div class="page-subtitle">
-          按 Registration ID 查看棱镜 / 极光推送 · 已读状态 · 未读可重推（仍未读则走邮件兜底）
+          按 Registration ID 查看服务商受理、设备收到、系统显示和已读状态
         </div>
       </div>
       <n-button type="primary" secondary @click="reload">刷新</n-button>
@@ -59,7 +59,7 @@
           :loading="loading"
           :bordered="false"
           :pagination="pagination"
-          :scroll-x="1280"
+          :scroll-x="1540"
           @update:page="onPage"
         />
       </div>
@@ -68,7 +68,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, h, onMounted, reactive, ref } from 'vue';
+import { computed, h, onMounted, onUnmounted, reactive, ref } from 'vue';
 import {
   NButton,
   NDataTable,
@@ -90,6 +90,7 @@ const page = ref(1);
 const pageSize = 20;
 const projectOptions = ref<{ label: string; value: string }[]>([]);
 const knownRids = ref<{ registrationId: string; channelName: string }[]>([]);
+let recoveryTimer: ReturnType<typeof setInterval> | undefined;
 
 const filters = reactive({
   registrationId: '',
@@ -127,6 +128,18 @@ const pagination = computed(() => ({
   itemCount: total.value,
   showSizePicker: false,
 }));
+
+function deliveryState(row: any) {
+  const count = Number(row.targetDeviceCount) || 0;
+  const provider = row.providerAcceptedAt ? { label: '服务商已受理', type: 'success' as const } : { label: row.status === 'PENDING' ? '等待服务商受理' : row.status === 'FAILED' ? '服务商未确认受理' : '历史记录无受理时间', type: 'default' as const };
+  const unsupported = row.receiptSupport !== 'signed';
+  const missing = row.receiptSupport === 'unknown' || !row.receiptSupport ? '历史记录无设备回执' : '当前目标不支持设备回执';
+  const received = count > 1 && !unsupported ? { label: `设备收到 ${row.receivedDeviceCount || 0}/${count}`, type: row.receivedDeviceCount >= count ? 'success' as const : 'info' as const }
+    : row.deviceReceivedAt ? { label: '设备已收到', type: 'success' as const } : { label: unsupported ? missing : '设备接收待确认', type: 'default' as const };
+  const displayed = count > 1 && !unsupported ? { label: `系统显示 ${row.displayedDeviceCount || 0}/${count}`, type: row.displayedDeviceCount >= count ? 'success' as const : 'info' as const }
+    : row.deviceDisplayedAt ? { label: '系统已显示', type: 'success' as const } : { label: unsupported ? '系统显示无回执' : '系统显示待确认', type: 'default' as const };
+  return [provider, received, displayed];
+}
 
 const columns = [
   {
@@ -176,6 +189,10 @@ const columns = [
       }
       return h(NTag, { size: 'small', type: 'warning' }, { default: () => '未读' });
     },
+  },
+  {
+    title: '推送各阶段', key: 'delivery', width: 210,
+    render: (row: any) => h(NSpace, { vertical: true, size: 4 }, { default: () => deliveryState(row).map(state => h(NTag, { size: 'small', type: state.type }, { default: () => state.label })) }),
   },
   {
     title: '邮件兜底',
@@ -276,6 +293,7 @@ function copyText(text: string, label = '内容') {
 }
 
 async function reload() {
+  if (loading.value) return;
   loading.value = true;
   try {
     const res: any = await messagesApi.deviceHistory({
@@ -333,5 +351,7 @@ onMounted(async () => {
     /* ignore */
   }
   await reload();
+  recoveryTimer = setInterval(() => { if (!document.hidden) void reload(); }, 12000);
 });
+onUnmounted(() => { if (recoveryTimer) clearInterval(recoveryTimer); });
 </script>

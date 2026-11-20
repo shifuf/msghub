@@ -16,7 +16,10 @@ import { sanitizeErrorMessage } from '../common/utils';
 import {
   resolveUnsubscribeSecret,
   signReadToken,
+  signConversationToken,
 } from '../common/token.util';
+import { snapshotJpushTarget, withoutConversationToken } from '../adapters/jpush-audience';
+import { addDeviceReceiptTokens } from '../adapters/jpush-receipts';
 
 @Injectable()
 export class ChannelsService {
@@ -278,11 +281,10 @@ export class ChannelsService {
       adminChannelTest: true,
       messageId: log.id,
     };
-    if (toAddress && c.type === ChannelType.JPUSH) {
-      extra.registrationId =
-        typeof config.registrationId === 'string'
-          ? config.registrationId.trim()
-          : toAddress;
+    if (c.type === ChannelType.JPUSH) {
+      Object.assign(extra, snapshotJpushTarget(config));
+      const target = extra._jpushAudience as any;
+      toAddress = target?.registration_id?.[0] || target?.alias?.[0] || null;
     }
     try {
       const secret = resolveUnsubscribeSecret(
@@ -290,6 +292,11 @@ export class ChannelsService {
         { allowDevFallback: true },
       );
       extra.readToken = signReadToken(log.id, secret);
+      if (c.type === ChannelType.JPUSH) {
+        extra.conversationId = log.id;
+        extra.conversationToken = signConversationToken(log.id, secret);
+        Object.assign(extra, addDeviceReceiptTokens(log.id, extra, secret));
+      }
     } catch (e: any) {
       this.logger.warn(`channel test readToken skip: ${e?.message || e}`);
     }
@@ -297,11 +304,12 @@ export class ChannelsService {
     await this.prisma.messageLog.update({
       where: { id: log.id },
       data: {
+        toAddress,
         payload: {
           title,
           content,
           to: toAddress,
-          extra,
+          extra: withoutConversationToken(extra),
         } as any,
       },
     });
@@ -319,6 +327,7 @@ export class ChannelsService {
       where: { id: log.id },
       data: {
         status: result.success ? MessageStatus.SUCCESS : MessageStatus.FAILED,
+        providerAcceptedAt: result.success && c.type !== ChannelType.INBOX ? new Date() : null,
         response: result.response as any,
         errorMessage: sanitizeErrorMessage(result.errorMessage),
         durationMs,

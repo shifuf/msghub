@@ -11,7 +11,7 @@
     "build": "pnpm -r --filter @msg/api --filter @msg/web build",
     "typecheck": "pnpm -r typecheck",
     "lint": "node scripts/lint.cjs",
-    "test": "node --test tests/*.test.cjs scripts/security-regression.cjs scripts/security-followup.test.cjs scripts/delivery-regression.test.cjs && pnpm --filter @msg/web test",
+    "test": "node --test --test-concurrency=1 tests/*.test.cjs scripts/security-regression.cjs scripts/security-followup.test.cjs scripts/delivery-regression.test.cjs && pnpm --filter @msg/web test",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",
     "db:up": "node scripts/db-up.js",
     "db:migrate": "pnpm --filter @msg/api prisma:migrate",

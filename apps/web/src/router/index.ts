@@ -60,6 +60,9 @@ const router = createRouter({
           component: () => import('@/views/PushTemplatesView.vue'),
         },
         { path: '/messages', name: 'messages', component: () => import('@/views/MessagesView.vue') },
+        { path: '/conversations', name: 'conversations', component: () => import('@/views/ConversationsView.vue') },
+        { path: '/devices', name: 'devices', component: () => import('@/views/DevicesView.vue') },
+        { path: '/operations', name: 'operations', component: () => import('@/views/OperationsView.vue') },
         {
           path: '/device-push',
           name: 'device-push',

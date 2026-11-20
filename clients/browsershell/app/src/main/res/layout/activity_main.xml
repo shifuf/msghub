@@ -1,0 +1,371 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/via_bg"
+    android:fitsSystemWindows="false">
+
+    <!-- Non-overlapping chrome so WebView and buttons always receive clicks -->
+    <LinearLayout
+        android:id="@+id/rootColumn"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <LinearLayout
+            android:id="@+id/topBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="52dp"
+            android:background="@drawable/bg_top_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="16dp"
+            android:paddingEnd="8dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp">
+
+            <LinearLayout
+                android:id="@+id/urlBarContainer"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:minHeight="48dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_url_bar"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:paddingStart="14dp"
+                android:paddingEnd="0dp">
+
+                <ImageView
+                    android:id="@+id/addressIcon"
+                    android:layout_width="18dp"
+                    android:layout_height="18dp"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_search"
+                    app:tint="@color/via_text_secondary" />
+
+                <TextView
+                    android:id="@+id/titleView"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:ellipsize="end"
+                    android:gravity="center_vertical"
+                    android:maxLines="1"
+                    android:text="@string/url_hint"
+                    android:textColor="@color/via_text"
+                    android:textSize="16sp" />
+
+                <EditText
+                    android:id="@+id/urlBar"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:minHeight="48dp"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:background="@android:color/transparent"
+                    android:hint="@string/url_hint"
+                    android:imeOptions="actionGo"
+                    android:inputType="textUri"
+                    android:singleLine="true"
+                    android:textColor="@color/via_input_text"
+                    android:textColorHint="@color/via_input_hint"
+                    android:textSize="16sp"
+                    android:visibility="gone" />
+
+                <ImageButton
+                    android:id="@+id/btnClearUrl"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/clear"
+                    android:padding="14dp"
+                    android:src="@drawable/ic_close"
+                    android:visibility="gone"
+                    app:tint="@color/via_text_secondary" />
+
+                <ImageButton
+                    android:id="@+id/btnRefresh"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/refresh"
+                    android:padding="14dp"
+                    android:src="@drawable/ic_refresh"
+                    app:tint="@color/via_icon" />
+            <ImageButton
+                android:id="@+id/btnTopQr"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_marginStart="2dp"
+                android:background="?attr/selectableItemBackgroundBorderless"
+                android:contentDescription="@string/menu_qr"
+                android:padding="13dp"
+                android:src="@drawable/ic_qr"
+                app:tint="@color/via_icon" />
+            </LinearLayout>
+
+
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/progressBar"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="2dp"
+            android:indeterminate="false"
+            android:max="100"
+            android:progress="0"
+            android:progressDrawable="@drawable/progress_via"
+            android:visibility="gone" />
+
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1">
+
+            <androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+                android:id="@+id/swipeRefresh"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <FrameLayout
+                    android:id="@+id/webContainer"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="@color/via_bg" />
+            </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+
+            <LinearLayout
+                android:id="@+id/suggestPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="10dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/bg_suggest_panel"
+                android:elevation="6dp"
+                android:orientation="vertical"
+                android:visibility="gone">
+
+                <androidx.recyclerview.widget.RecyclerView
+                    android:id="@+id/suggestList"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:nestedScrollingEnabled="false"
+                    android:overScrollMode="never" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <LinearLayout
+            android:id="@+id/bottomBar"
+            android:layout_width="match_parent"
+            android:layout_height="56dp"
+            android:background="@drawable/bg_bottom_bar"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="4dp">
+
+            <ImageButton
+                android:id="@+id/btnBack"
+                style="@style/ViaToolbarIcon"
+                android:contentDescription="@string/nav_back"
+                android:src="@drawable/ic_back" />
+
+            <ImageButton
+                android:id="@+id/btnForward"
+                style="@style/ViaToolbarIcon"
+                android:contentDescription="@string/nav_forward"
+                android:src="@drawable/ic_forward" />
+
+            <ImageButton
+                android:id="@+id/btnHome"
+                style="@style/ViaToolbarIcon"
+                android:contentDescription="@string/nav_home"
+                android:src="@drawable/ic_home" />
+
+            <FrameLayout
+                android:layout_width="0dp"
+                android:layout_height="48dp"
+                android:layout_weight="1">
+
+                <ImageButton
+                    android:id="@+id/btnTabs"
+                    android:layout_width="match_parent"
+                    android:layout_height="match_parent"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/nav_tabs"
+                    android:padding="11dp"
+                    android:scaleType="centerInside"
+                    android:src="@drawable/ic_tabs"
+                    app:tint="@color/via_icon" />
+
+                <TextView
+                    android:id="@+id/tabCountBadge"
+                    android:layout_width="22dp"
+                    android:layout_height="22dp"
+                    android:layout_gravity="center"
+                    android:gravity="center"
+                    android:includeFontPadding="false"
+                    android:text="1"
+                    android:textColor="@color/via_icon"
+                    android:textSize="10sp"
+                    android:textStyle="bold" />
+            </FrameLayout>
+
+            <ImageButton
+                android:id="@+id/btnMenu"
+                style="@style/ViaToolbarIcon"
+                android:contentDescription="@string/nav_menu"
+                android:src="@drawable/ic_menu" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Edge swipe visual hints (never intercept clicks) -->
+    <View
+        android:id="@+id/edgeHintLeft"
+        android:layout_width="5dp"
+        android:layout_height="110dp"
+        android:layout_gravity="center_vertical|start"
+        android:background="@drawable/bg_edge_hint"
+        android:clickable="false"
+        android:focusable="false"
+        android:elevation="4dp"
+        android:visibility="gone" />
+
+    <View
+        android:id="@+id/edgeHintRight"
+        android:layout_width="5dp"
+        android:layout_height="110dp"
+        android:layout_gravity="center_vertical|end"
+        android:background="@drawable/bg_edge_hint"
+        android:clickable="false"
+        android:focusable="false"
+        android:elevation="4dp"
+        android:rotation="180"
+        android:visibility="gone" />
+
+    <!-- Bottom tab sheet -->
+    <FrameLayout
+        android:id="@+id/tabSwitcher"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/via_sheet_scrim"
+        android:clickable="true"
+        android:elevation="14dp"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/tabSheet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_menu_sheet"
+            android:clickable="true"
+            android:focusable="true"
+            android:maxHeight="480dp"
+            android:orientation="vertical"
+            android:paddingBottom="8dp">
+
+            <View
+                android:layout_width="40dp"
+                android:layout_height="4dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="10dp"
+                android:layout_marginBottom="4dp"
+                android:background="@drawable/bg_sheet_handle" />
+
+            <TextView
+                android:id="@+id/tabSheetTitle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="24dp"
+                android:paddingVertical="12dp"
+                android:text="标签页"
+                android:textColor="@color/via_text"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <androidx.recyclerview.widget.RecyclerView
+                android:id="@+id/tabList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:clipToPadding="false"
+                android:overScrollMode="never"
+                android:paddingHorizontal="4dp"
+                android:paddingTop="2dp"
+                android:paddingBottom="2dp" />
+
+            <TextView android:id="@+id/btnNewTab" android:layout_width="match_parent" android:layout_height="52dp"
+                android:layout_marginHorizontal="20dp" android:layout_marginTop="12dp" android:layout_marginBottom="12dp"
+                android:background="@drawable/bg_accent_button" android:gravity="center" android:text="新建标签页"
+                android:textColor="@color/via_accent" android:textSize="16sp" android:fontFamily="sans-serif-medium"
+                android:contentDescription="新建标签页" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Menu sheet -->
+    <FrameLayout
+        android:id="@+id/menuOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/via_sheet_scrim"
+        android:clickable="true"
+        android:elevation="16dp"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:id="@+id/menuSheet"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:background="@drawable/bg_menu_sheet"
+            android:clickable="true"
+            android:elevation="8dp"
+            android:focusable="true"
+            android:orientation="vertical"
+            android:paddingBottom="6dp">
+
+            <View
+                android:layout_width="40dp"
+                android:layout_height="4dp"
+                android:layout_gravity="center_horizontal"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="4dp"
+                android:background="@drawable/bg_sheet_handle" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingHorizontal="24dp"
+                android:paddingVertical="12dp"
+                android:text="浏览工具"
+                android:textColor="@color/via_text"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <androidx.viewpager2.widget.ViewPager2
+                android:id="@+id/menuPager"
+                android:layout_width="match_parent"
+                android:layout_height="210dp"
+                android:paddingHorizontal="2dp" />
+
+            <LinearLayout
+                android:id="@+id/menuDots"
+                android:layout_width="match_parent"
+                android:layout_height="48dp"
+                android:gravity="center"
+                android:orientation="horizontal" />
+
+            <TextView android:id="@+id/btnCloseMenu" android:layout_width="match_parent" android:layout_height="48dp"
+                android:layout_marginHorizontal="20dp" android:layout_marginTop="8dp" android:layout_marginBottom="8dp"
+                android:background="@drawable/bg_accent_button" android:text="完成" android:gravity="center"
+                android:textSize="16sp" android:fontFamily="sans-serif-medium" android:textColor="@color/via_accent" />
+        </LinearLayout>
+    </FrameLayout>
+</FrameLayout>

@@ -12,7 +12,7 @@ test('production seed rejects APP_ENV-only missing password; cold seed and full 
  const database='msghub_audit_seed_'+randomBytes(4).toString('hex');const control=new Client({connectionString:url});await control.connect();await control.query(`CREATE DATABASE "${database}"`);
  const fresh=new URL(url);fresh.pathname='/'+database;
  const cwd=fs.mkdtempSync(path.join(os.tmpdir(),'msghub-bootstrap-'));const deep=path.join(cwd,'isolated','cwd');fs.mkdirSync(deep,{recursive:true});
- const env={SystemRoot:process.env.SystemRoot,PATH:process.env.PATH,TEMP:process.env.TEMP,TMP:process.env.TMP,APP_ENV:'production',NODE_ENV:'development',JWT_SECRET:randomBytes(32).toString('hex'),DATABASE_URL:fresh.href,REDIS_HOST:'127.0.0.1',REDIS_PORT:'56488',ADMIN_USERNAME:'audit-bootstrap',ADMIN_PASSWORD:'Safe-audit-password-7X!'};
+ const env={SystemRoot:process.env.SystemRoot,PATH:process.env.PATH,TEMP:process.env.TEMP,TMP:process.env.TMP,AUDIT_COMPILED:process.env.AUDIT_COMPILED,APP_ENV:'production',NODE_ENV:'development',JWT_SECRET:randomBytes(32).toString('hex'),DATABASE_URL:fresh.href,REDIS_HOST:'127.0.0.1',REDIS_PORT:'56488',ADMIN_USERNAME:'audit-bootstrap',ADMIN_PASSWORD:'Safe-audit-password-7X!'};
  const run=(args,extra={})=>spawnSync(process.execPath,args,{cwd:deep,env:{...env,...extra},encoding:'utf8',timeout:45000});
  const prisma=api.resolve('prisma/build/index.js');const compiled=process.env.AUDIT_COMPILED==='true';const seed=path.join(root,compiled?'apps/api/dist/prisma/seed.js':'apps/api/prisma/seed.ts');const register=api.resolve('ts-node/register/transpile-only');
  const seedArgs=compiled?[seed]:['-r',register,seed];

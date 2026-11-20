@@ -7,6 +7,7 @@ import {
   requireString,
 } from './adapter.interface';
 import { assertSafeOutboundUrl, fetchJson } from './http.util';
+import { resolveJpushAudience } from './jpush-audience';
 
 const JPUSH_PUSH_URL = 'https://api.jpush.cn/v3/push';
 
@@ -64,41 +65,17 @@ export class JpushAdapter implements ChannelAdapter {
     config: Record<string, unknown>,
     extra: Record<string, unknown>,
   ): unknown {
-    const mode = this.audienceMode(config);
-    // 单次发送可被 extra 覆盖 RID / alias
-    if (mode === 'all' && !extra.registrationId && !extra.alias) {
-      return 'all';
-    }
-    const ridRaw =
-      (typeof extra.registrationId === 'string' && extra.registrationId) ||
-      (typeof config.registrationId === 'string' && config.registrationId) ||
-      '';
-    const aliasRaw =
-      (typeof extra.alias === 'string' && extra.alias) ||
-      (typeof config.alias === 'string' && config.alias) ||
-      '';
-
-    if (mode === 'alias' || (!ridRaw && aliasRaw)) {
-      const list = String(aliasRaw)
-        .split(/[,;\s]+/)
-        .map((s) => s.trim())
-        .filter(Boolean);
-      if (!list.length) throw new Error('JPUSH alias 为空');
-      return { alias: list };
-    }
-
-    const list = String(ridRaw)
-      .split(/[,;\s]+/)
-      .map((s) => s.trim())
-      .filter(Boolean);
-    if (!list.length) throw new Error('JPUSH registrationId 为空');
-    return { registration_id: list };
+    return resolveJpushAudience(config, extra);
   }
 
   async send(
     config: Record<string, unknown>,
     payload: SendPayload,
   ): Promise<SendResult> {
+    const pinnedAppKey = payload.extra?._jpushAppKey;
+    if (pinnedAppKey && pinnedAppKey !== config.appKey) {
+      return { success: false, errorMessage: '原始极光应用已更改，已阻止发送到其他应用' };
+    }
     try {
       this.validateConfig(config);
     } catch (e: any) {
@@ -125,7 +102,7 @@ export class JpushAdapter implements ChannelAdapter {
     const extras: Record<string, string> = {};
     for (const [k, v] of Object.entries(extra)) {
       if (v === undefined || v === null) continue;
-      if (k === 'registrationId' || k === 'alias' || k === 'variables') continue;
+      if (k.startsWith('_') || k === 'registrationId' || k === 'alias' || k === 'variables') continue;
       if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') {
         extras[k] = String(v);
       }

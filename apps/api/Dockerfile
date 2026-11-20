@@ -1,6 +1,8 @@
 # syntax=docker/dockerfile:1
 FROM node:22-alpine AS base
-RUN apk add --no-cache openssl && corepack enable && corepack prepare pnpm@9.15.0 --activate
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache openssl && corepack enable && corepack prepare pnpm@9.15.0 --activate
 WORKDIR /workspace
 
 FROM base AS build
@@ -13,9 +15,14 @@ RUN pnpm --filter @msg/api exec prisma generate && pnpm --filter @msg/api build
 RUN pnpm --filter @msg/api deploy --prod /out
 
 FROM node:22-alpine AS runner
+ARG APP_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ARG ALPINE_MIRROR=https://dl-cdn.alpinelinux.org/alpine
 WORKDIR /app
-ENV NODE_ENV=production APP_ENV=production
-RUN apk add --no-cache wget openssl libssl3
+ENV NODE_ENV=production APP_ENV=production APP_COMMIT=$APP_COMMIT BUILD_TIME=$BUILD_TIME
+LABEL org.opencontainers.image.revision=$APP_COMMIT org.opencontainers.image.created=$BUILD_TIME
+RUN sed -i "s#https://dl-cdn.alpinelinux.org/alpine#${ALPINE_MIRROR}#g" /etc/apk/repositories \
+    && apk add --no-cache wget openssl libssl3
 COPY --from=build /out ./
 COPY --from=build /workspace/apps/api/dist ./dist
 COPY --from=build /workspace/apps/api/prisma ./prisma

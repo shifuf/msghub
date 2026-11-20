@@ -5,6 +5,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { generateApiKey, hashApiKey, apiKeyPrefix } from '../common/utils';
 import { AdapterRegistry } from '../adapters/adapters.registry';
 import { Prisma } from '@prisma/client';
+import { validateScheduleRule, validateScheduleTimezone } from '../schedules/recurrence';
 
 const deriveKey = promisify(scrypt);
 const GROUPS = ['channels', 'projects', 'emailTemplates', 'pushTemplates', 'templateRevisions', 'systemSettings', 'emailSuppress', 'schedules', 'eventDefinitions', 'partners'] as const;
@@ -16,7 +17,7 @@ const FIELDS: Record<string, string[]> = {
   pushTemplates: ['projectId', 'code', 'name', 'titleTpl', 'contentTpl', 'variables', 'enabled', 'draft', 'revision'],
   templateRevisions: ['kind', 'templateId', 'revision', 'snapshot', 'createdAt'],
   systemSettings: ['key', 'value'], emailSuppress: ['projectId', 'address', 'reason', 'source', 'expiresAt'],
-  schedules: ['projectId', 'channelId', 'channelType', 'kind', 'title', 'content', 'html', 'toAddress', 'templateCode', 'variables', 'runAt', 'cron'],
+  schedules: ['projectId', 'channelId', 'channelType', 'kind', 'title', 'content', 'html', 'toAddress', 'templateCode', 'variables', 'runAt', 'cron', 'timezone'],
   eventDefinitions: ['projectId', 'code', 'name', 'description', 'defaultPriority', 'pushTemplateCode', 'emailTemplateCode', 'enabled', 'isSystem'],
   partners: ['name', 'url', 'logoUrl', 'description', 'displayOrder', 'enabled'],
 };
@@ -114,7 +115,8 @@ export class BackupService {
           if (row.kind === 'unread_email_fallback' || row.variables?.quietRelease || row.variables?.unreadEmailFallback) throw new BadRequestException('不能导入依赖原消息记录的内部任务');
           if (!['push', 'email'].includes(row.kind || 'push') || !['PENDING', 'PAUSED'].includes(row.status || 'PAUSED')) throw new BadRequestException('任务类型或状态无效');
           if (!Number.isFinite(Date.parse(row.runAt))) throw new BadRequestException('任务 runAt 无效');
-          if (row.cron && row.cron !== 'daily') throw new BadRequestException('任务 cron 仅支持 daily');
+          validateScheduleRule(row.cron);
+          validateScheduleTimezone(row.timezone);
         }
       }
     }

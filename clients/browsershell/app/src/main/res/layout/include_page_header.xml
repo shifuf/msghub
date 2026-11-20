@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/pageHeading" android:layout_width="match_parent" android:layout_height="wrap_content"
+    android:layout_marginHorizontal="20dp" android:orientation="vertical" android:paddingTop="4dp" android:paddingBottom="20dp">
+    <TextView android:id="@+id/pageTitle" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textAppearance="@style/PrismPageTitle" android:accessibilityHeading="true" />
+    <TextView android:id="@+id/pageSubtitle" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:layout_marginTop="6dp" android:textColor="@color/via_text_secondary" android:textSize="13sp" android:lineSpacingExtra="3dp" />
+</LinearLayout>

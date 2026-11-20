@@ -10,6 +10,8 @@ import { RealtimeModule } from '../realtime/realtime.module';
 import { ProjectsModule } from '../projects/projects.module';
 import { EmailPolicyModule } from '../email-policy/email-policy.module';
 import { QuietHoursService } from '../common/quiet-hours.service';
+import { ConversationsService } from './conversations.service';
+import { PublicConversationsController, AdminConversationInboxController, AdminConversationsController } from './conversations.controller';
 
 @Module({
   imports: [
@@ -21,11 +23,14 @@ import { QuietHoursService } from '../common/quiet-hours.service';
     ProjectsModule,
     EmailPolicyModule,
   ],
-  providers: [MessagesService, QuietHoursService],
+  providers: [MessagesService, QuietHoursService, ConversationsService],
   controllers: [
     MessagesController,
     MessagesExtraController,
     PublicMessagesController,
+    PublicConversationsController,
+    AdminConversationInboxController,
+    AdminConversationsController,
   ],
   exports: [MessagesService, QuietHoursService],
 })

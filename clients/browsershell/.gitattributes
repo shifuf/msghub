@@ -1,0 +1,2 @@
+# Preserve the imported project byte-for-byte for source-manifest.json, including vendor resources.
+* -text -whitespace

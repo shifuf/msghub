@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="@color/via_bg" android:fitsSystemWindows="true">
+    <com.google.android.material.appbar.MaterialToolbar android:id="@+id/toolbar" android:layout_width="match_parent" android:layout_height="wrap_content" app:navigationIconTint="@color/via_icon" app:titleTextColor="@color/via_text" />
+    <include layout="@layout/include_page_header" />
+    <LinearLayout android:id="@+id/messageControls" android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingHorizontal="20dp">
+        <EditText android:id="@+id/messageSearch" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:maxLines="1" android:singleLine="true" android:inputType="text" android:imeOptions="actionSearch" android:hint="搜索标题或消息内容" android:background="@drawable/bg_dialog_input" android:padding="14dp" android:textColor="@color/via_text" android:textColorHint="@color/via_text_secondary" android:textSize="16sp" android:drawableStart="@drawable/ic_search" android:drawableTint="@color/via_text_secondary" android:drawablePadding="10dp" />
+        <com.google.android.material.button.MaterialButtonToggleGroup android:id="@+id/messageFilter" android:layout_width="match_parent" android:layout_height="wrap_content" android:layout_marginTop="8dp" app:singleSelection="true" app:selectionRequired="true" app:checkedButton="@id/filterAll">
+            <com.google.android.material.button.MaterialButton android:id="@+id/filterAll" style="?attr/materialButtonOutlinedStyle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:minHeight="48dp" android:text="全部" android:textSize="15sp" />
+            <com.google.android.material.button.MaterialButton android:id="@+id/filterUnread" style="?attr/materialButtonOutlinedStyle" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:minHeight="48dp" android:text="未读" android:textSize="15sp" />
+        </com.google.android.material.button.MaterialButtonToggleGroup>
+        <TextView android:id="@+id/messageStatus" android:layout_width="match_parent" android:layout_height="wrap_content" android:minHeight="48dp" android:gravity="center_vertical" android:paddingVertical="10dp" android:paddingHorizontal="4dp" android:textSize="13sp" android:textColor="@color/via_text_secondary" android:background="?attr/selectableItemBackground" android:drawableStart="@drawable/ic_bell" android:drawableTint="@color/via_text_secondary" android:drawablePadding="10dp" android:clickable="true" android:focusable="true" />
+    </LinearLayout>
+    <androidx.swiperefreshlayout.widget.SwipeRefreshLayout android:id="@+id/messageRefresh" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1">
+        <FrameLayout android:layout_width="match_parent" android:layout_height="match_parent">
+            <androidx.recyclerview.widget.RecyclerView android:id="@+id/recycler" android:layout_width="match_parent" android:layout_height="match_parent" android:clipToPadding="false" />
+            <TextView android:id="@+id/emptyView" android:layout_width="match_parent" android:layout_height="match_parent" android:gravity="center" android:padding="28dp" android:textColor="@color/via_text_secondary" android:textSize="16sp" android:visibility="gone" />
+        </FrameLayout>
+    </androidx.swiperefreshlayout.widget.SwipeRefreshLayout>
+</LinearLayout>

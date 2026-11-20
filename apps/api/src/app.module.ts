@@ -21,6 +21,8 @@ import { ActivityModule } from './activity/activity.module';
 import { EmailPolicyModule } from './email-policy/email-policy.module';
 import { EventsModule } from './events/events.module';
 import { SiteModule } from './site/site.module';
+import { DevicesModule } from './devices/devices.module';
+import { OperationsModule } from './operations/operations.module';
 import { resolveThrottle, validateSecurityEnvironment } from './common/env';
 import { RedisThrottleModule, RedisThrottleStorage } from './common/redis-throttle.storage';
 
@@ -51,6 +53,8 @@ import { RedisThrottleModule, RedisThrottleStorage } from './common/redis-thrott
     EmailPolicyModule,
     EventsModule,
     SiteModule,
+    DevicesModule,
+    OperationsModule,
   ],
   providers: [
     {

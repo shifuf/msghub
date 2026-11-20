@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="PrismPageTitle" parent="TextAppearance.MaterialComponents.Headline5">
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textSize">32sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:letterSpacing">-0.025</item>
+        <item name="android:textColor">@color/via_text</item>
+    </style>
+    <style name="PrismSearch">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:layout_marginHorizontal">20dp</item>
+        <item name="android:layout_marginBottom">12dp</item>
+        <item name="android:background">@drawable/bg_url_bar</item>
+        <item name="android:paddingHorizontal">14dp</item>
+        <item name="android:paddingVertical">12dp</item>
+        <item name="android:drawableStart">@drawable/ic_search</item>
+        <item name="android:drawablePadding">10dp</item>
+        <item name="android:drawableTint">@color/via_text_secondary</item>
+        <item name="android:textColor">@color/via_text</item>
+        <item name="android:textColorHint">@color/via_input_hint</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:inputType">text</item>
+        <item name="android:imeOptions">actionSearch</item>
+    </style>
+</resources>

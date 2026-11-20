@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Editable vector source: hexagonal crystal prism + spectrum fan -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Spectrum fan (lower-right) -->
+    <path android:pathData="M68,58 L92,48" android:strokeWidth="2.1" android:strokeColor="#EF4444" android:strokeLineCap="round" />
+    <path android:pathData="M68,59 L93,54" android:strokeWidth="2.1" android:strokeColor="#F97316" android:strokeLineCap="round" />
+    <path android:pathData="M68,60 L94,60" android:strokeWidth="2.1" android:strokeColor="#EAB308" android:strokeLineCap="round" />
+    <path android:pathData="M68,61 L93,66" android:strokeWidth="2.1" android:strokeColor="#22C55E" android:strokeLineCap="round" />
+    <path android:pathData="M68,62 L92,72" android:strokeWidth="2.1" android:strokeColor="#06B6D4" android:strokeLineCap="round" />
+    <path android:pathData="M68,63 L90,77" android:strokeWidth="2.1" android:strokeColor="#3B82F6" android:strokeLineCap="round" />
+    <path android:pathData="M68,64 L87,82" android:strokeWidth="2.1" android:strokeColor="#A855F7" android:strokeLineCap="round" />
+
+    <!-- Crystal body (hex gem) -->
+    <path
+        android:pathData="M54,22 L72,38 L72,62 L54,78 L36,62 L36,38 Z"
+        android:fillColor="#94C5FF"
+        android:fillAlpha="0.90" />
+    <!-- facets -->
+    <path android:pathData="M54,22 L36,38 L54,50 Z" android:fillColor="#E0F2FE" android:fillAlpha="0.70" />
+    <path android:pathData="M54,22 L72,38 L54,50 Z" android:fillColor="#60A5FA" android:fillAlpha="0.40" />
+    <path android:pathData="M36,38 L36,62 L54,78 L54,50 Z" android:fillColor="#3B82F6" android:fillAlpha="0.25" />
+    <path android:pathData="M72,38 L72,62 L54,78 L54,50 Z" android:fillColor="#1D4ED8" android:fillAlpha="0.35" />
+    <!-- outline -->
+    <path
+        android:pathData="M54,22 L72,38 L72,62 L54,78 L36,62 L36,38 Z"
+        android:strokeWidth="2.2"
+        android:strokeColor="#F8FAFC"
+        android:fillColor="#00000000"
+        android:strokeLineJoin="round" />
+    <!-- center ridge -->
+    <path android:pathData="M54,22 L54,78" android:strokeWidth="1" android:strokeColor="#66FFFFFF" />
+    <!-- sparkle -->
+    <path
+        android:pathData="M54,34 m-1.4,0 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0"
+        android:fillColor="#FFFFFF" />
+</vector>

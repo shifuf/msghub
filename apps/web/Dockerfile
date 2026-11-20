@@ -11,6 +11,10 @@ WORKDIR /app/apps/web
 RUN pnpm build
 
 FROM nginx:1.27-alpine
+ARG APP_COMMIT=unknown
+ARG BUILD_TIME=unknown
+ENV APP_COMMIT=$APP_COMMIT BUILD_TIME=$BUILD_TIME
+LABEL org.opencontainers.image.revision=$APP_COMMIT org.opencontainers.image.created=$BUILD_TIME
 COPY apps/web/nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/apps/web/dist /usr/share/nginx/html
 # 保证存在默认 config.js（entrypoint 启动时会按环境覆盖）

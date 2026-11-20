@@ -129,6 +129,8 @@ server {
 
 ## 本地开发
 
+完整灾备、age 密钥、独立 runner 和真实恢复验证的部署步骤见 [运维与完整灾备](docs/operations-backup.md)。
+
 环境要求：Node.js ≥ 22.22、pnpm 9.15+、Docker（用于 Postgres + Redis；也可使用本机独立服务）。
 
 ```bash

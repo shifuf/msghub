@@ -4,8 +4,20 @@ import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 import { resolveRedis } from '../common/env';
 
+export type ConversationEventData = {
+  kind: 'reply' | 'read' | 'status';
+  messageId: string;
+  replyId?: string;
+  author?: 'admin' | 'device';
+  reader?: 'admin' | 'device';
+  count?: number;
+  status?: 'open' | 'closed';
+  createdAt?: string;
+  deliveryStatus?: string;
+};
+
 export type RealtimeEvent = {
-  type: 'message' | 'stats' | 'ping' | 'ready';
+  type: 'message' | 'conversation' | 'device' | 'stats' | 'ping' | 'ready';
   data: any;
   at: string;
 };
@@ -33,7 +45,8 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
         const envelope = JSON.parse(raw);
         if (envelope.instanceId === this.instanceId || typeof envelope.instanceId !== 'string') return;
         const event = envelope.event;
-        if (!event || !['message', 'stats'].includes(event.type) || typeof event.at !== 'string') return;
+        if (!event || !['message', 'conversation', 'device', 'stats'].includes(event.type) || typeof event.at !== 'string') return;
+        if (event.type === 'conversation' && (!event.data || typeof event.data.messageId !== 'string' || !['reply', 'read', 'status'].includes(event.data.kind))) return;
         this.bus.next(event);
       } catch { /* Ignore malformed envelopes. Clients recover through incremental polling. */ }
     });
@@ -54,7 +67,7 @@ export class RealtimeService implements OnModuleInit, OnModuleDestroy {
       at: new Date().toISOString(),
     };
     this.bus.next(event);
-    if (this.publisher && (type === 'message' || type === 'stats')) {
+    if (this.publisher && (type === 'message' || type === 'conversation' || type === 'device' || type === 'stats')) {
       const payload = JSON.stringify({ instanceId: this.instanceId, event });
       if (Buffer.byteLength(payload) <= 1024 * 1024) void this.publisher.publish(this.channel, payload).catch(() => undefined);
     }

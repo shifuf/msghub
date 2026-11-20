@@ -17,6 +17,7 @@ export const authApi = {
 /** 健康检查（公共 /api，无需管理端鉴权） */
 export const healthApi = {
   check: () => http.get('/health'),
+  ready: () => http.get('/health/ready'),
 };
 
 export const dashboardApi = {
@@ -30,6 +31,13 @@ export const dashboardApi = {
 
 export const realtimeApi = {
   ticket: () => http.post('/admin/realtime/ticket'),
+};
+
+export const conversationsApi = {
+  list: (params: { status?: 'open' | 'closed' | 'all'; unread?: boolean; search?: string; page?: number; pageSize?: number } = {}) =>
+    http.get('/admin/conversations', { params }),
+  update: (id: string, data: { status: 'open' | 'closed' }) =>
+    http.patch(`/admin/conversations/${encodeURIComponent(id)}`, data),
 };
 
 export const projectsApi = {
@@ -177,6 +185,8 @@ export const pushTemplatesApi = {
 };
 
 export const messagesApi = {
+  conversation: (id: string, params: { before?: string; limit?: number } = {}) => http.get(`/admin/messages/${encodeURIComponent(id)}/conversation`, { params }),
+  reply: (id: string, data: { content: string; clientId: string }) => http.post(`/admin/messages/${encodeURIComponent(id)}/reply`, data),
   retention: () => http.get('/admin/messages/retention'),
   setRetention: (days: number) => http.post('/admin/messages/retention', { days }),
   timeline: (id: string) => http.get(`/admin/messages/${id}/timeline`),
@@ -229,9 +239,24 @@ export const schedulesApi = {
   create: (data: any) => http.post('/admin/schedules', data),
   cancel: (id: string) => http.delete(`/admin/schedules/${id}`),
   get: (id: string) => http.get(`/admin/schedules/${id}`),
+  executions: (id: string, params: { page?: number; pageSize?: number } = {}) => http.get(`/admin/schedules/${encodeURIComponent(id)}/executions`, { params }),
   update: (id: string, data: any) => http.patch(`/admin/schedules/${id}`, data),
   pause: (id: string) => http.post(`/admin/schedules/${id}/pause`),
   resume: (id: string) => http.post(`/admin/schedules/${id}/resume`),
+};
+
+export const devicesApi = {
+  list: () => http.get('/admin/devices'),
+  createPairingCode: (channelId: string) => http.post('/admin/devices/pair-codes', { channelId }),
+  revoke: (id: string) => http.delete(`/admin/devices/${encodeURIComponent(id)}`),
+};
+
+export const operationsApi = {
+  version: () => http.get('/admin/operations/version'),
+  backupStatus: () => http.get('/admin/operations/backup/status'),
+  updateBackupConfig: (data: { enabled?: boolean; intervalHours?: number; retentionCount?: number; verifyAfterBackup?: boolean }) => http.put('/admin/operations/backup/config', data),
+  runBackup: () => http.post('/admin/operations/backup/run'),
+  verifyBackup: (backupId: string) => http.post('/admin/operations/backup/verify', { backupId }),
 };
 
 export const queueApi = {

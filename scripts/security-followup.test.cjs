@@ -10,12 +10,13 @@ const config={get:key=>key==='JWT_SECRET'?'strong-encryption-test-secret-3Rj9@9w
 
 test('TOTP storage encrypts secrets, binds identity and rejects tampering/expiry',()=>{
   const {sealTotp,openTotp}=load('auth/totp-storage.util.ts');
-  const stored=sealTotp('JBSWY3DPEHPK3PXP',config,'u1:pending',Date.now()+1000);
+  const now=1700000000000;
+  const stored=sealTotp('JBSWY3DPEHPK3PXP',config,'u1:pending',now+1000);
   assert.ok(!stored.includes('JBSWY3DPEHPK3PXP'));
-  assert.equal(openTotp(stored,config,'u1:pending'),'JBSWY3DPEHPK3PXP');
-  assert.throws(()=>openTotp(stored,config,'u2:pending'));
-  assert.throws(()=>openTotp(stored.slice(0,-4)+'AAAA',config,'u1:pending'));
-  assert.throws(()=>openTotp(stored,config,'u1:pending',Date.now()+2000));
+  assert.equal(openTotp(stored,config,'u1:pending',now),'JBSWY3DPEHPK3PXP');
+  assert.throws(()=>openTotp(stored,config,'u2:pending',now));
+  assert.throws(()=>openTotp(stored.slice(0,-4)+'AAAA',config,'u1:pending',now));
+  assert.throws(()=>openTotp(stored,config,'u1:pending',now+2000));
   assert.throws(()=>openTotp('JBSWY3DPEHPK3PXP',config,'u1:pending'));
 });
 

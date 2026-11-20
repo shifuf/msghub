@@ -7,9 +7,9 @@ const ts = require('typescript');
 const pinia = require('pinia');
 const vue = require('vue');
 
-function setup({ rows = [], markFailure = false, pages } = {}) {
+function setup({ rows = [], markFailure = false, pages, conversationCounts = [0], conversationList } = {}) {
   pinia.setActivePinia(pinia.createPinia());
-  const marked = []; const urls = []; const requests = [];
+  const marked = []; const urls = []; const requests = []; const intervals = []; const conversationRequests = [];
   let source;
   class EventSource {
     constructor(url) { urls.push(url); source = this; this.listeners = {}; }
@@ -18,6 +18,10 @@ function setup({ rows = [], markFailure = false, pages } = {}) {
     emit(data) { this.listeners.message?.({ data: JSON.stringify({ type: 'message', data }) }); }
   }
   const api = {
+    conversationsApi: { list: async params => {
+      const index = conversationRequests.push(params) - 1;
+      return conversationList ? conversationList(params) : { unreadCount: conversationCounts[Math.min(index, conversationCounts.length - 1)] };
+    } },
     dashboardApi: { notifications: async (params) => {
       requests.push(params);
       return pages ? pages(params) : { items: rows, pending: 0, failed24h: 0, nextCursor: 'snapshot', hasMore: false };
@@ -28,11 +32,13 @@ function setup({ rows = [], markFailure = false, pages } = {}) {
   const exports = {};
   const sourceText = fs.readFileSync(path.join(__dirname, '../src/stores/notify.ts'), 'utf8');
   vm.runInNewContext(ts.transpileModule(sourceText, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2021 } }).outputText, {
-    exports, console, setTimeout, clearTimeout, setInterval, clearInterval, EventSource,
+    exports, console, setTimeout, clearTimeout,
+    setInterval: (callback, delay) => { intervals.push({ callback, delay }); return setInterval(callback, delay); },
+    clearInterval, EventSource,
     localStorage: { getItem: () => null, setItem: () => {} },
     require: (id) => id === 'pinia' ? pinia : id === 'vue' ? vue : id === '@/api' ? api : { useAuthStore: () => ({ token: 'long-secret' }) },
   });
-  return { store: exports.useNotifyStore(), marked, urls, requests, source: () => source };
+  return { store: exports.useNotifyStore(), marked, urls, requests, intervals, conversationRequests, source: () => source };
 }
 const row = { id: 'm1', status: 'PENDING', channelType: 'JPUSH', createdAt: '2026-11-17T08:00:00Z', updatedAt: '2026-11-17T08:00:00Z', readAt: null };
 
@@ -83,4 +89,28 @@ test('timestamp watermark is used when backend cursor is null', async () => {
     assert.equal(ctx.store.items[0].status, 'FAILED');
     assert.equal(ctx.requests[1].since, '2026-11-17T09:00:00Z');
   } finally { ctx.store.stop(); }
+});
+
+test('reconnect and periodic catch-up recover conversation unread when SSE events are missed', async () => {
+  const ctx = setup({ conversationCounts: [0, 2, 4] });
+  try {
+    await ctx.store.start();
+    assert.equal(ctx.store.conversationUnread, 0);
+    await ctx.source().onopen();
+    assert.equal(ctx.store.conversationUnread, 2, 'reconnect must recover the server count');
+    ctx.intervals.find(timer => timer.delay === 12000).callback();
+    await new Promise(setImmediate);
+    assert.equal(ctx.store.conversationUnread, 4, 'HTTP polling must recover without a conversation SSE event');
+  } finally { ctx.store.stop(); }
+});
+
+test('an unread response arriving after logout cannot repopulate conversation state', async () => {
+  let resolveCount;
+  const ctx = setup({ conversationList: () => new Promise(resolve => { resolveCount = resolve; }) });
+  const starting = ctx.store.start();
+  await new Promise(setImmediate);
+  ctx.store.stop();
+  resolveCount({ unreadCount: 7 });
+  await starting;
+  assert.equal(ctx.store.conversationUnread, null);
 });
